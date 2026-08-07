@@ -16,8 +16,12 @@ local TILE_PX = 8
 local Item = {}
 
 -- Draws one item scaled into a boxSize square at (x, y).  Returns false when
--- nothing could be drawn.
-function Item.draw(session, item, x, y, boxSize, blueprints)
+-- nothing could be drawn.  `blueprints` is the blueprint book array (only used
+-- by the blueprint kind).  `tileset`, when supplied, is a renderer bundle
+-- { image, quads, aliasMap, blocks } for the tileset whose blocks this item
+-- belongs to -- so the picker can thumbnail a non-current tileset's blocks from
+-- its own atlas instead of always the live map's tileset.
+function Item.draw(session, item, x, y, boxSize, blueprints, tileset)
   if not item then return false end
   local r = session.map and session.map.renderer
 
@@ -61,8 +65,15 @@ function Item.draw(session, item, x, y, boxSize, blueprints)
 
   if item.kind == "block" then
     if not r or not r.image then return false end
-    local image, quads = r.image, r.quads
-    local block = session.tileset and session.tileset.blocks[item.id + 1]
+    local image, quads, aliasMap, blocksTable
+    if tileset then
+      image, quads, aliasMap, blocksTable =
+        tileset.image, tileset.quads, tileset.aliasMap, tileset.blocks
+    else
+      image, quads, aliasMap, blocksTable =
+        r.image, r.quads, r.aliasMap, (session.tileset and session.tileset.blocks)
+    end
+    local block = blocksTable and blocksTable[item.id + 1]
     if not block then return false end
     local scale = boxSize / Common.BLOCK_PX
     love.graphics.setColor(1, 1, 1, 1)
@@ -72,7 +83,7 @@ function Item.draw(session, item, x, y, boxSize, blueprints)
       for cc = 0, 3 do
         local ci = rr * 4 + cc + 1
         local tile = block[ci]
-        local remap = r.aliasMap and r.aliasMap[item.id]
+        local remap = aliasMap and aliasMap[item.id]
         if remap and remap[ci - 1] then tile = remap[ci - 1] end
         local quad = quads[tile]
         if quad then

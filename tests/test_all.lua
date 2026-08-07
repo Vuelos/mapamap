@@ -13,6 +13,7 @@ local SUITES = {
   require("mods.mapamap.tests.connection_tests"),
   require("mods.mapamap.tests.coords_tests"),
   require("mods.mapamap.tests.picker_tests"),
+  require("mods.mapamap.tests.picker_render_tests"),
   require("mods.mapamap.tests.hotbar_tests"),
 }
 

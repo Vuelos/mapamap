@@ -135,8 +135,21 @@ function Picker.resolve(selection, session)
         or selection
 end
 
+-- The tileset DEF currently browsed: the selected real tileset, or the current
+-- map's tileset when nothing has been selected.  Returns nil for the virtual
+-- "Items & NPCs" catalog (it carries no blocks).  Resolving the browsed tileset
+-- here (rather than reaching back to session.tileset inside itemList) is what
+-- keeps a non-current tileset listing ITS OWN blocks instead of the live map's.
+function Picker.tilesetDef(session, selection)
+  local tsName = Picker.resolve(selection, session)
+  if not tsName or tsName == Picker.SPEC then return nil end
+  return session.data and session.data.tilesets and session.data.tilesets[tsName]
+end
+
 -- The full item list for the currently-browsed catalog entry (or the current
--- map's tileset when unset), as { kind, id } items.
+-- map's tileset when unset), as { kind, id } items.  Block ids are indices into
+-- the BROWSED tileset's blocks (see tilesetDef), so a non-current tileset lists
+-- its own block count -- not the live map's.
 function Picker.itemList(session, selection)
   local data = session.data
   if selection == Picker.SPEC then
@@ -158,8 +171,7 @@ function Picker.itemList(session, selection)
     end
     return list
   end
-  local tsName = Picker.resolve(selection, session)
-  local ts = tsName and data and data.tilesets and data.tilesets[tsName]
+  local ts = Picker.tilesetDef(session, selection)
   local blocks = ts and ts.blocks
   local list = {}
   if blocks then
@@ -190,6 +202,14 @@ function Picker.draw(session, vw, vh, state, font)
   local catalog = Picker.catalog(session)
   local active = Picker.resolve(selection, session) or Picker.current(session)
   local activeLabel = Picker.label(session, active)
+
+  -- Atlas bundle for the block thumbnails: when browsing a tileset other than
+  -- the live map's, render from THAT tileset's image/quads/blocks (cached) so
+  -- each catalog entry shows its own tiles, not the current map's.  nil lets
+  -- Item.draw fall back to the live map renderer (current tileset / sprites).
+  local browsedTs = Picker.tilesetDef(session, selection)
+  local thumbBundle = (browsedTs and browsedTs ~= session.tileset)
+    and session:thumbnailBundle(browsedTs) or nil
 
   love.graphics.setColor(1, 1, 1, 0.95)
   font.draw("Tilesets   (E to close)   showing: " .. activeLabel
@@ -252,7 +272,7 @@ function Picker.draw(session, vw, vh, state, font)
       local item = list[slot]
       love.graphics.setColor(0.22, 0.22, 0.26, 0.92)
       love.graphics.rectangle("fill", gx, gy, Picker.SLOT, Picker.SLOT)
-      Item.draw(session, item, gx + 2, gy + 2, Picker.SLOT - 4)
+      Item.draw(session, item, gx + 2, gy + 2, Picker.SLOT - 4, nil, thumbBundle)
       -- white ring on hover, red ring on the selected hotbar item
       if hoverItem == slot then
         love.graphics.setColor(1, 1, 1, 0.95)

@@ -116,6 +116,6 @@ return {
   tests = {
     "test_pickerClickReplacesSelectedSlot",
     "test_blueprintClickReplacesSelectedSlot",
-    "test_dragHotbarTargetSlot",
+    "test_dragToHotbarTargetSlot",
   },
 }

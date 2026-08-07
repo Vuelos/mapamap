@@ -57,6 +57,7 @@ function Session.new(mod, game, mapId)
     _sessionOriginals = {},
     _sessionEncounters = {},
     _sessionDirty = {},
+    _thumbBundles = {},
     paletteList = {},
     spriteList = {},
     paletteColors = nil,
@@ -107,6 +108,33 @@ function Session:refreshLiveRenderers()
     end
   end
   if self.map and self.map.renderer then self.map.renderer:rebuild() end
+end
+
+-- Lazily builds (and caches) a renderer bundle for a non-current tileset so the
+-- picker can thumbnail its blocks against that tileset's OWN atlas -- not the
+-- live map's tileset.  Building a real TileRenderer (via a 1x1 dummy map) makes
+-- the thumbnails go through the same palette / GBC-atlas bake as the world, so a
+-- non-current tileset is colored instead of rendering in grayscale.  Returns
+-- { image, quads, aliasMap, blocks } or nil when the tileset has no drawable
+-- image.  The cache is keyed by tileset id + current lighting (darkKey) so a
+-- cave/light toggle rebuilds the bake; warping swaps the whole session, so it
+-- starts unpopulated each map.
+function Session:thumbnailBundle(tsDef)
+  if not tsDef then return nil end
+  local tid = tsDef.id or "?"
+  local key = tid .. PaletteFX.darkKey()
+  if not self._thumbBundles then self._thumbBundles = {} end
+  local b = self._thumbBundles[key]
+  if b ~= nil then return b end
+  local mini = { tileset = tsDef, def = { width = 1, height = 1 }, id = tid }
+  local ok, r = pcall(TileRenderer.new, mini, self.data)
+  if not ok or not r or not r.image or not r.quads then
+    self._thumbBundles[key] = false
+    return nil
+  end
+  b = { image = r.image, quads = r.quads, aliasMap = r.aliasMap, blocks = tsDef.blocks }
+  self._thumbBundles[key] = b
+  return b
 end
 
 -- Reloads the session's map from the live data and rebuilds its renderer.

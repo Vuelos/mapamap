@@ -81,6 +81,36 @@ function test_labelForSpecialAndTileset()
   assert(Picker.label(s, "TS_A") == "Overworld A", "tileset label uses its name")
 end
 
+-- The core regression for "picker shows the current map tileset for all
+-- tilesets": browsing a tileset that is NOT the current one must list that
+-- tileset's own blocks (its count), and resolve nil back to the current tileset.
+function test_itemListBrowsesSelectedTilesetNotCurrent()
+  local s = sessionWith("TS_A", {
+    TS_A = { blocks = { 0, 1, 2 } },                  -- current tileset, 3 blocks
+    TS_B = { blocks = { 0, 1, 2, 3, 4, 5, 6, 7 } },  -- foreign tileset, 8 blocks
+  }, {}, {})
+  local foreign = Picker.itemList(s, "TS_B")
+  assert(#foreign == 8, "browsing TS_B should list its 8 blocks, got " .. #foreign)
+  assert(foreign[1].kind == "block" and foreign[1].id == 0, "first block id 0")
+  assert(foreign[8].kind == "block" and foreign[8].id == 7, "last block id 7")
+  -- The default (unset) selection must still be the current tileset's blocks.
+  local cur = Picker.itemList(s, nil)
+  assert(#cur == 3, "nil/default should be the current tileset blocks, got " .. #cur)
+  -- A foreign selection must NOT leak the current tileset's block count.
+  assert(#foreign ~= #cur, "browsed tileset must not fall back to the current tileset")
+end
+
+function test_tilesetDefResolvesBrowsedTileset()
+  local a = { id = "TS_A", blocks = { 0 } }
+  local b = { id = "TS_B", blocks = { 0, 1, 2, 3, 4, 5 } }
+  local s = sessionWith("TS_A", { TS_A = a, TS_B = b }, {}, {})
+  assert(Picker.tilesetDef(s, "TS_B") == b, "tilesetDef should resolve the browsed tileset")
+  assert(Picker.tilesetDef(s, "TS_B") ~= a, "must not fall back to the current tileset")
+  assert(Picker.tilesetDef(s, nil) == a, "nil selection resolves to the current tileset")
+  assert(Picker.tilesetDef(s, Picker.SPEC) == nil, "virtual catalog has no tileset def")
+  assert(Picker.tilesetDef(s, "TS_NOPE") == nil, "unknown tileset resolves to nil")
+end
+
 return {
   name = "MAPAMAP_PICKER",
   tests = {
@@ -90,5 +120,7 @@ return {
     "test_blockListForRealTileset",
     "test_nilSelectionResolvesToCurrentTileset",
     "test_labelForSpecialAndTileset",
+    "test_itemListBrowsesSelectedTilesetNotCurrent",
+    "test_tilesetDefResolvesBrowsedTileset",
   },
 }
