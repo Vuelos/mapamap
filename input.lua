@@ -191,25 +191,9 @@ function Input.paintBlueprint(session, bid, mx, my)
   local tx, ty = Coords.toWorldCell(t, mx, my)
   session.cursorBx = tx - (tx % 2)
   session.cursorBy = ty - (ty % 2)
-  local def = session.def
-  local bx0 = math.floor((session.cursorBx * 16) / Common.BLOCK_PX)
-  local by0 = math.floor((session.cursorBy * 16) / Common.BLOCK_PX)
-  local changed = false
-  for row = 0, bp.h - 1 do
-    for col = 0, bp.w - 1 do
-      local bx = bx0 + col
-      local by = by0 + row
-      if bx >= 0 and by >= 0 and bx < def.width and by < def.height then
-        def.blocks[by * def.width + bx + 1] = bp.tiles[row * bp.w + col + 1]
-        changed = true
-      end
-    end
-  end
-  if changed then
-    session.mapChanged = true
-    session:refreshLiveRenderers()
-  end
-  return changed
+  -- Defer the stamp + renderer rebuild to MapOps.paintBlueprint, which also
+  -- pushes an undo step so Ctrl+Z / Ctrl+Y move through blueprint stamps.
+  return session:paintBlueprint(bp)
 end
 
 -- The block / sprite id stored at a given screen point, for the cursor pick.

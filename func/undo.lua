@@ -153,11 +153,13 @@ function Undo:undo(def, shiftL, shiftT, mapId, recip)
   if snap._full then
     redoSnap.blocks = deepCopy(def.blocks)
   else
-    local blockDelta = {}
-    for idx, vals in pairs(snap.blocks) do
-      blockDelta[idx] = { old = vals.new, new = vals.old }
-    end
-    redoSnap.blocks = blockDelta
+      -- The redo snapshot must mirror the forward op (old=pre, new=post) so that
+      -- applyRedoDelta (which writes .new) re-applies the change on Ctrl+Y.
+      local blockDelta = {}
+      for idx, vals in pairs(snap.blocks) do
+        blockDelta[idx] = { old = vals.old, new = vals.new }
+      end
+      redoSnap.blocks = blockDelta
   end
   table.insert(self._redoStack, redoSnap)
   if snap._full then

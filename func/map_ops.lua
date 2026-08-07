@@ -222,10 +222,43 @@ function MapOps.paintBlock(self)
      self.undo:capture(def, shiftL, shiftT, mapId, changedIndices, oldValues)
    end
 
-   self.mapChanged = true
-   if mapId ~= nil then self.neighborDirty[mapId] = true end
-   rebuildFor(self, mapId)
- end
+    self.mapChanged = true
+    if mapId ~= nil then self.neighborDirty[mapId] = true end
+    rebuildFor(self, mapId)
+  end
+
+-- Stamps a captured blueprint grid onto the primary map def at the current
+-- cursor block (2x2-aligned), skipping tiles that fall outside the map body.
+-- Mirrors paintBlock's delta-capture so a blueprint stamp is pushed as an undo
+-- step and can be undone/redone with Ctrl+Z / Ctrl+Y like any block paint.
+function MapOps.paintBlueprint(self, bp)
+  local def = self.def
+  local bx0 = math.floor(self.cursorBx * CELL_PX / BLOCK_PX)
+  local by0 = math.floor(self.cursorBy * CELL_PX / BLOCK_PX)
+  local changed = false
+  local changedIndices, oldValues = {}, {}
+  for row = 0, bp.h - 1 do
+    for col = 0, bp.w - 1 do
+      local bx = bx0 + col
+      local by = by0 + row
+      if bx >= 0 and by >= 0 and bx < def.width and by < def.height then
+        local idx = by * def.width + bx + 1
+        changedIndices[#changedIndices + 1] = idx
+        oldValues[#oldValues + 1] = def.blocks[idx]
+        def.blocks[idx] = bp.tiles[row * bp.w + col + 1]
+        changed = true
+      end
+    end
+  end
+  if changed then
+    if self.undo then
+      self.undo:capture(def, nil, nil, nil, changedIndices, oldValues)
+    end
+    self.mapChanged = true
+    self.map.renderer:rebuild()
+  end
+  return changed
+end
 
 function MapOps.revertBlock(self)
    local mapId, def, ox, oy = paintTarget(self, self.cursorBx, self.cursorBy)
