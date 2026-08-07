@@ -1,0 +1,6 @@
+id: mapamap
+name: Mapamap
+author: gamedev
+summary: Paint blocks directly on the live overworld with a Minecraft-style hotbar.
+category: TOOL
+version: 0.1.0
