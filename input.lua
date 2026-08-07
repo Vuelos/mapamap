@@ -515,8 +515,9 @@ function Input.keypressed(session, key)
     session:restoreSnapshot("redo")
     session:refreshLiveRenderers()
     return true
-  elseif key >= "1" and key <= "8" then
+  elseif key >= "0" and key <= "9" then
     local idx = tonumber(key)
+    if idx == 0 then idx = 10 end
     if idx and idx >= 1 and idx <= Hotbar.SLOTS then
       Input.selected = idx
       Input.applySelection(session)

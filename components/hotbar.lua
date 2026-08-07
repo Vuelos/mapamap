@@ -7,7 +7,7 @@ local Item = require("mods.mapamap.components.item")
 
 local Hotbar = {}
 
-Hotbar.SLOTS = 8
+Hotbar.SLOTS = 10
 Hotbar.SLOT = 48          -- square slot size
 Hotbar.GAP = 8            -- gap between slots
 Hotbar.PAD = 10           -- clearance from the bottom edge
