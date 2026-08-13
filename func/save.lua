@@ -18,7 +18,7 @@ local tablesEqual = Common.tablesEqual
 -- the current map definition and the original snapshot.
 function Save.buildPatch(mapDef, original)
   local patch = {}
-  local tracked = {"blocks", "warps", "objects", "signs", "borderBlock", "width", "height", "name", "textDefs", "connections"}
+  local tracked = {"blocks", "warps", "objects", "signs", "borderBlock", "width", "height", "name", "textDefs", "connections", "graftBlocks"}
   if original then
     for _, key in ipairs(tracked) do
       local cur = mapDef[key]

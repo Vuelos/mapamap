@@ -34,6 +34,7 @@ function Undo:captureFull(def, shiftL, shiftT, mapId, recip)
     warps       = deepCopy(def.warps),
     objects     = deepCopy(def.objects),
     signs       = deepCopy(def.signs),
+    graftBlocks = deepCopy(def.graftBlocks),
     connections = deepCopy(def.connections),
     width       = def.width,
     height      = def.height,
@@ -64,6 +65,7 @@ function Undo:captureDelta(def, shiftL, shiftT, mapId, changedIndices, oldValues
     warps       = deepCopy(def.warps),
     objects     = deepCopy(def.objects),
     signs       = deepCopy(def.signs),
+    graftBlocks = deepCopy(def.graftBlocks),
     connections = deepCopy(def.connections),
     width       = def.width,
     height      = def.height,
@@ -95,6 +97,7 @@ local function snapshotOf(def, shiftL, shiftT, mapId, recip)
     warps       = deepCopy(def.warps),
     objects     = deepCopy(def.objects),
     signs       = deepCopy(def.signs),
+    graftBlocks = deepCopy(def.graftBlocks),
     connections = deepCopy(def.connections),
     width       = def.width,
     height      = def.height,
@@ -113,6 +116,7 @@ local function applyFull(def, snapshot)
   def.warps       = deepCopy(snapshot.warps)
   def.objects     = deepCopy(snapshot.objects)
   def.signs       = deepCopy(snapshot.signs)
+  def.graftBlocks = deepCopy(snapshot.graftBlocks)
   def.connections = deepCopy(snapshot.connections)
   def.width       = snapshot.width
   def.height      = snapshot.height
@@ -126,6 +130,7 @@ local function applyDelta(def, snapshot)
   def.warps       = deepCopy(snapshot.warps)
   def.objects     = deepCopy(snapshot.objects)
   def.signs       = deepCopy(snapshot.signs)
+  def.graftBlocks = deepCopy(snapshot.graftBlocks)
   def.connections = deepCopy(snapshot.connections)
   def.width       = snapshot.width
   def.height      = snapshot.height
@@ -139,6 +144,7 @@ local function applyRedoDelta(def, snapshot)
   def.warps       = deepCopy(snapshot.warps)
   def.objects     = deepCopy(snapshot.objects)
   def.signs       = deepCopy(snapshot.signs)
+  def.graftBlocks = deepCopy(snapshot.graftBlocks)
   def.connections = deepCopy(snapshot.connections)
   def.width       = snapshot.width
   def.height      = snapshot.height
