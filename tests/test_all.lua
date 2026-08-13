@@ -15,6 +15,10 @@ local SUITES = {
   require("mods.mapamap.tests.picker_tests"),
   require("mods.mapamap.tests.picker_render_tests"),
   require("mods.mapamap.tests.hotbar_tests"),
+  require("mods.mapamap.tests.inventory_tests"),
+  require("mods.mapamap.tests.graft_tests"),
+  require("mods.mapamap.tests.graft_resolve_tests"),
+  require("mods.mapamap.tests.graft_palette_tests"),
 }
 
 local allOk = true

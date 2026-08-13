@@ -18,6 +18,7 @@ local Save = require("mods.mapamap.func.save")
 local Snapshot = require("mods.mapamap.func.snapshot")
 local Common = require("mods.mapamap.func.common")
 local NewMap = require("mods.mapamap.func.new_map")
+local Hotbar = require("mods.mapamap.components.hotbar")
 
 local active = false
 local session = nil
@@ -92,6 +93,7 @@ local function persistSession(mod, game)
   saveMapPatches(mod, session)
   Input.saveHotbar(mod)
   Input.saveBlueprints(mod)
+  Input.saveInventory(mod)
   session = nil
 end
 
@@ -125,6 +127,14 @@ local function openSession(mod, game)
   end
   Input.applySelection(s)
   Input.loadBlueprints(mod)
+  Input.loadInventory(mod)
+  -- A fresh inventory starts seeded with the default hotbar blocks so the
+  -- panel is never empty on first use.
+  if #Input.inventory.items == 0 then
+    for i = 1, Hotbar.SLOTS do
+      if Input.hotbar[i] then Input.addInventory(Input.hotbar[i]) end
+    end
+  end
   return s
 end
 
@@ -272,6 +282,12 @@ return function(mod)
         if not Data.maps[id] then Data.maps[id] = def end
       end
     end
+    -- Any replayed patch may reference grafted foreign blocks -- grow every
+    -- touched tileset's atlas from the live defs before maps rebuild, so a
+    -- patched map renders its imports instead of drawing blank cells.
+    local Data = require("src.core.Data")
+    local Graft = require("mods.mapamap.func.graft")
+    Graft.materializeAll(Data)
     local MapLoader = require("src.world.MapLoader")
     if MapLoader and MapLoader.invalidateAll then MapLoader.invalidateAll() end
   end)

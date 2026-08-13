@@ -13,6 +13,7 @@ local Common = require("mods.mapamap.func.common")
 local Snapshot = require("mods.mapamap.func.snapshot")
 local Undo = require("mods.mapamap.func.undo")
 local Save = require("mods.mapamap.func.save")
+local Graft = require("mods.mapamap.func.graft")
 local TileRenderer = require("src.render.TileRenderer")
 local PaletteFX = require("src.render.PaletteFX")
 
@@ -27,6 +28,7 @@ mixin(Session, require("mods.mapamap.func.editor_neighbors"))
 -- map or its tileset cannot be loaded.
 function Session.new(mod, game, mapId)
   local data = game.data
+  activeData = data
   local def = data.maps[mapId]
   if not def then return nil end
   local tileset = data.tilesets[def.tileset]
@@ -79,6 +81,29 @@ function Session:refreshAfterLoad()
   if self.map and self.map.renderer then self.map.renderer:rebuild() end
 end
 
+-- Rebuilds the overworld's live NPC list for the current map from def.objects
+-- (the same source the engine reads on map enter), so a just-placed or removed
+-- object appears immediately instead of waiting for the next map enter.  No-op
+-- when the visible map isn't the session's, or the world has no npc pool
+-- helper.
+function Session:refreshObjects()
+  local ow = self.game and self.game.overworld
+  if not (ow and ow.map and ow.map.id == self.mapId) then return false end
+  local fn = ow.pooledNPC
+  if not fn then return false end
+  ow.npcs = {}
+  for _, obj in ipairs(self.def.objects or {}) do
+    local npc = fn(ow.npcPool, self.data, self.mapId, obj)
+    npc.frozen = false
+    table.insert(ow.npcs, npc)
+  end
+  if ow.player then
+    ow.entities = { ow.player }
+    for _, n in ipairs(ow.npcs) do table.insert(ow.entities, n) end
+  end
+  return true
+end
+
 -- Force the renderers the PLAYER actually sees to rebuild so an edit shows up
 -- immediately.  The session mutates the live map `def` records, and rebuild
 -- the session's own cached Map instances, but the overworld may be holding a
@@ -108,6 +133,36 @@ function Session:refreshLiveRenderers()
     end
   end
   if self.map and self.map.renderer then self.map.renderer:rebuild() end
+end
+
+-- Full renderer reload for the tileset whose grown atlas a graft just
+-- changed.  rebuild() only drops the cached window; a new grown image needs
+-- fresh TileRenderers for every map that uses the tileset (the edited map
+-- and any overworld instance / neighbor strips) so the grown atlas is
+-- re-derived from the updated defs on the next build.
+function Session:reloadGraftedRenderers()
+  local MapLoader = require("src.world.MapLoader")
+  Graft.invalidateTileset(self.data, self.tileset.id)
+  Graft.materialize(self.data, self.tileset.id)
+  self._thumbBundles = {}
+  -- The session's own cached Map is reloaded so its TileRenderer is rebuilt
+  -- against the new grown atlas.
+  if self.map then
+    MapLoader.invalidate(self.mapId)
+    self.map = MapLoader.load(self.data, self.mapId)
+    if self.map and self.map.renderer then self.map.renderer:rebuild() end
+  end
+  -- The overworld may hold a different Map instance for this tileset; swap it
+  -- for a fresh one right away so the player sees the graft immediately.
+  local ow = self.game and self.game.overworld
+  if ow and ow.map and ow.map.tileset == self.tileset then
+    local m = MapLoader.load(self.data, ow.map.id)
+    if m and m.renderer then
+      ow.map = m
+      ow.map.renderer:rebuild()
+    end
+  end
+  self:refreshLiveRenderers()
 end
 
 -- Lazily builds (and caches) a renderer bundle for a non-current tileset so the
@@ -208,6 +263,7 @@ function Session:placeSprite(spriteId)
   })
   self.mapChanged = true
   self:refreshLiveRenderers()
+  self:refreshObjects()
   return true
 end
 
@@ -236,6 +292,7 @@ function Session:placeItem(itemId)
   })
   self.mapChanged = true
   self:refreshLiveRenderers()
+  self:refreshObjects()
   return true
 end
 
@@ -251,6 +308,7 @@ function Session:eraseObjectsAtCell()
       table.remove(list, i)
       self.mapChanged = true
       self:refreshLiveRenderers()
+      self:refreshObjects()
       return true
     end
   end
@@ -272,7 +330,44 @@ function Session:applySavedPatches()
       self.def[key] = value
     end
   end
-  self:refreshAfterLoad()
+  -- A patch may carry graftBlocks (imported foreign blocks) -- grow the atlas
+  -- from the freshly applied defs and rebuild the session's renderer so the
+  -- grafted blocks draw immediately.
+  Graft.invalidateTileset(self.data, self.tileset.id)
+  Graft.materialize(self.data, self.tileset.id)
+  self._thumbBundles = {}
+  self:reloadGraftedRenderers()
+  self:rebuildNeighbors()
+  self:storeOriginal()
+end
+
+-- Imports a foreign tileset block into the edited map: reserves the map-local
+-- block id in def.graftBlocks (deduped across the tileset's grafts) and marks
+-- the map changed.  Does NOT reload renderers; the caller is responsible for
+-- calling reloadGraftedRenderers when the new block must be drawable.
+-- Returns the map-local block id, or nil on failure.
+function Session:importBlock(srcTileset, srcBlock)
+  local id = Graft.importBlock(self.data, self.tileset.id, self.def,
+                               srcTileset, srcBlock)
+  if id then
+    self.mapChanged = true
+  end
+  return id
+end
+
+-- Imports a foreign tileset block into the edited map: reserves the map-local
+-- block id in def.graftBlocks (deduped across the tileset's grafts), grows
+-- the atlas, and reloads renderers so the new block is drawable immediately.
+-- Returns the map-local block id, or nil on failure.  The id is what the
+-- caller stores into def.blocks / the paint brush.
+function Session:graftBlock(srcTileset, srcBlock)
+  local id = Graft.importBlock(self.data, self.tileset.id, self.def,
+                               srcTileset, srcBlock)
+  if id then
+    self.mapChanged = true
+    self:reloadGraftedRenderers()
+  end
+  return id
 end
 
 -- Grows the current map's dimension (width or height) so it matches the map

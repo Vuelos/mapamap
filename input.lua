@@ -19,6 +19,7 @@ local NewMap = require("mods.mapamap.func.new_map")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Picker = require("mods.mapamap.components.picker")
 local Blueprints = require("mods.mapamap.components.blueprints")
+local Inventory = require("mods.mapamap.components.inventory")
 
 local Input = {}
 
@@ -27,6 +28,9 @@ local Input = {}
 -- Empty slots are nil.
 Input.hotbar = {}
 Input.selected = 1
+-- The inventory panel: a persistent collection of placeables (blocks,
+-- sprites/items, warps, blueprints) stored flat, shown through one tab.
+Input.inventory = { items = {}, tab = 1, scroll = 1 }
 -- The tileset picker panel.
 Input.showPicker = false
 Input.pickerScroll = 1
@@ -71,6 +75,25 @@ function Input.serialize()
   return Input.hotbar
 end
 
+-- Adds an item to the inventory, switching to its tab and scrolling so the
+-- newest entry is visible.
+function Input.addInventory(item)
+  if not item then return end
+  table.insert(Input.inventory.items, item)
+  local tabIdx = Inventory.tabFor(item)
+  Input.inventory.tab = tabIdx
+  local vw, vh = love.graphics.getDimensions()
+  local list = Inventory.listFor(Input.inventory.items, tabIdx)
+  local per = Inventory.perPage(vw, vh)
+  Input.inventory.scroll = math.max(1, math.ceil(#list / per))
+end
+
+-- The filtered inventory list for the active tab (input-facing alias so call
+-- sites don't reach into the component for the model).
+function Input.inventoryList()
+  return Inventory.listFor(Input.inventory.items, Input.inventory.tab)
+end
+
 function Input.reset()
   state.painting = false
   state.erasing = false
@@ -86,6 +109,9 @@ function Input.reset()
   Input.selectEnd = nil
   Input.showBlueprints = false
   Input.blueprintScroll = 1
+  Input.inventory.tab = 1
+  Input.inventory.scroll = 1
+  Input._needsGraftRebuild = false
 end
 
 -- Re-points the picker and hotbar when the session switches to a new map
@@ -124,7 +150,15 @@ function Input.applySelection(session)
     session.selectedSprite = nil
     session.selectedBlock = nil
   else
-    session.selectedBlock = item.id
+    local blockId = item.id
+    local srcTileset = item.srcTileset or item.tileset
+    if srcTileset and srcTileset ~= session.tileset.id then
+      local gid = session:importBlock(srcTileset, blockId)
+      if gid == nil then return false end
+      blockId = gid
+      session._needsGraftRebuild = true
+    end
+    session.selectedBlock = blockId
     session.selectedSprite = nil
   end
   return true
@@ -176,7 +210,17 @@ function Input.captureBlueprint(session)
   end
   local id = "blueprint_" .. os.time()
   table.insert(Input.blueprints, { id = id, w = w, h = h, tiles = tiles })
+  -- Blueprints surface in the inventory's Blueprints tab (the old separate
+  -- blueprint bar is folded away).
+  Input.addInventory({ kind = "blueprint", id = id })
   Input.selectStart, Input.selectEnd = nil, nil
+  -- The capture is done: leave rectangle-select and open the book so the new
+  -- blueprint is immediately visible after stamping it in.
+  Input.blueprintMode = false
+  Input.showBlueprints = true
+  Input.showPicker = false
+  local vw, vh = love.graphics.getDimensions()
+  Input.blueprintScroll = math.ceil(#Input.blueprints / Blueprints.perPage(vw, vh))
   return id
 end
 
@@ -246,6 +290,16 @@ function Input.paintAt(session, mx, my)
   session.cursorBx = tx - (tx % 2)
   session.cursorBy = ty - (ty % 2)
   session.selectedBlock = item.id
+  local srcTileset = item.srcTileset or item.tileset
+  if srcTileset then
+    local gid = session:importBlock(srcTileset, item.id)
+    if gid == nil then return false end
+    session.selectedBlock = gid
+    if session._needsGraftRebuild then
+      session:reloadGraftedRenderers()
+      session._needsGraftRebuild = false
+    end
+  end
   -- When the cursor is outside every laid-out map body (strictly beyond the
   -- map edge into open space), route through the edge expand-vs-create rule;
   -- otherwise paint normally (paintBlock handles in-body and neighbor cells).
@@ -345,6 +399,27 @@ function Input.mousepressed(session, game, mx, my, button)
       return true
     end
   end
+  -- Inventory panel: swap tabs or load a cell into the selected hotbar slot.
+  if button == 1 and Inventory.over(vw, vh, mx, my) then
+    local tabIdx = Inventory.tabAt(vw, vh, mx, my)
+    if tabIdx then
+      Input.inventory.tab = tabIdx
+      Input.inventory.scroll = 1
+      return true
+    end
+    local idx = Inventory.itemAt(vw, vh, mx, my, Input.inventory.scroll)
+    if idx then
+      local item = Input.inventoryList()[idx]
+      if item then
+        Input.hotbar[Input.selected] = item
+        Input.applySelection(session)
+      end
+      return true
+    end
+    -- Click inside the panel but outside any tab/cell: consume it so the
+    -- world underneath is never painted.
+    return true
+  end
   -- Hotbar selection.
   local slot = Hotbar.at(vw, vh, mx, my)
   if slot then
@@ -397,6 +472,10 @@ function Input.mousereleased(session, mx, my, button)
     if slot then
       Input.hotbar[slot] = Input.dragItem
       Input.selected = slot
+    elseif Inventory.over(vw, vh, mx, my) then
+      -- A dragged picker/blueprint entry dropped on the inventory lands in
+      -- the user's collection.
+      Input.addInventory(Input.dragItem)
     end
     Input.dragItem = nil
     return true
@@ -431,16 +510,22 @@ end
 -- Handles love.wheelmoved while active.
 function Input.wheelmoved(session, dy)
   if not session then return false end
+  local vw, vh = love.graphics.getDimensions()
+  local mx, my = love.mouse.getPosition()
+  if Inventory.over(vw, vh, mx, my) then
+    local list = Input.inventoryList()
+    local per = Inventory.perPage(vw, vh)
+    local max = math.max(1, math.ceil(#list / per))
+    Input.inventory.scroll = math.max(1, math.min(Input.inventory.scroll + dy, max))
+    return true
+  end
   if Input.showBlueprints then
-    local vw, vh = love.graphics.getDimensions()
     local per = Blueprints.perPage(vw, vh)
     local max = math.max(1, math.ceil(#Input.blueprints / per))
     Input.blueprintScroll = math.max(1, math.min(Input.blueprintScroll + dy, max))
     return true
   end
   if Input.showPicker then
-    local vw, vh = love.graphics.getDimensions()
-    local mx, my = love.mouse.getPosition()
     -- Scroll the left tileset-name list when the mouse is over it, else the
     -- item grid.
     local inList = Picker.nameAt(vw, vh, mx, my, Input.pickerTilesetScroll) ~= nil
@@ -469,11 +554,13 @@ end
 function Input.keypressed(session, key)
   if key == "e" then
     Input.showPicker = not Input.showPicker
+    if Input.showPicker then Input.showBlueprints = false end
     Input.pickerScroll = 1
     Input.pickerTilesetScroll = 1
     return true
   elseif key == "b" then
     Input.showBlueprints = not Input.showBlueprints
+    if Input.showBlueprints then Input.showPicker = false end
     Input.blueprintScroll = 1
     return true
   elseif key == "r" then
@@ -494,10 +581,12 @@ function Input.keypressed(session, key)
   elseif key == "z" and (love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")) then
     session:restoreSnapshot("undo")
     session:refreshLiveRenderers()
+    session:refreshObjects()
     return true
   elseif key == "y" and (love.keyboard.isDown("lctrl") or love.keyboard.isDown("rctrl")) then
     session:restoreSnapshot("redo")
     session:refreshLiveRenderers()
+    session:refreshObjects()
     return true
   elseif key >= "0" and key <= "9" then
     local idx = tonumber(key)
@@ -519,6 +608,21 @@ end
 -- Persists the blueprint book through the mod save system.
 function Input.saveBlueprints(mod)
   mod.save:set("mapamap_blueprints", Input.blueprints)
+end
+
+-- Persists the inventory collection through the mod save system.
+function Input.saveInventory(mod)
+  mod.save:set("mapamap_inventory", Input.inventory)
+end
+
+-- Loads the saved inventory collection ({ items, tab, scroll }).
+function Input.loadInventory(mod)
+  local saved = mod.save:get("mapamap_inventory", nil)
+  if saved and type(saved) == "table" and type(saved.items) == "table" then
+    Input.inventory = saved
+  else
+    Input.inventory = { items = {}, tab = 1, scroll = 1 }
+  end
 end
 
 -- Loads the saved blueprint book (a list of { id, w, h, tiles }).
