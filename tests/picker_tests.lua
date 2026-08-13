@@ -1,6 +1,7 @@
--- Picker catalog tests: the virtual "Items & NPCs" entry comes first, the
--- current map's tileset is featured first among the real tilesets, and the
--- item list for the virtual entry contains NPC sprites then items.
+-- Picker catalog tests: the virtual "NPCs" entry comes first, the current
+-- map's tileset is featured first among the real tilesets, and the item list
+-- for the virtual entry contains NPC sprites only (items stay in the
+-- inventory).
 
 package.path = "../../../?.lua;" .. package.path
 
@@ -51,12 +52,10 @@ function test_virtualItemListSpritesThenItems()
     LASS = {}, BUG = {},
   })
   local list = Picker.itemList(s, Picker.SPEC)
-  assert(#list == 4, "expected 4 virtual items, got " .. #list)
+  assert(#list == 2, "expected 2 sprites (no items), got " .. #list)
   assert(list[1].kind == "sprite" and list[1].id == "BUG",
     "sprites come first sorted, got " .. tostring(list[1].id))
   assert(list[2].kind == "sprite" and list[2].id == "LASS", "second sprite wrong")
-  assert(list[3].kind == "item" and list[3].id == "ACORN", "items after sprites")
-  assert(list[4].kind == "item" and list[4].id == "ZAPCAN", "last item wrong")
 end
 
 function test_blockListForRealTileset()
@@ -77,7 +76,7 @@ end
 
 function test_labelForSpecialAndTileset()
   local s = sessionWith("TS_A", { TS_A = { name = "Overworld A" } }, {}, {})
-  assert(Picker.label(s, Picker.SPEC) == "Items & NPCs", "special label")
+  assert(Picker.label(s, Picker.SPEC) == "NPCs", "special label")
   assert(Picker.label(s, "TS_A") == "Overworld A", "tileset label uses its name")
 end
 

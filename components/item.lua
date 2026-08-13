@@ -64,9 +64,21 @@ function Item.draw(session, item, x, y, boxSize, blueprints, tileset)
   end
 
   if item.kind == "block" then
-    if not r or not r.image then return false end
+    -- A foreign (srcTileset-tagged) block thumbs from its OWN tileset bundle
+    -- (grown/own atlas), never the live map's renderer -- the id indexes the
+    -- source tileset's block list, not the current one.
+    local bundle
+    if item.srcTileset then
+      local tsDef = session.data and session.data.tilesets and session.data.tilesets[item.srcTileset]
+      local thumb = session.thumbnailBundle
+      if tsDef and thumb then bundle = thumb(session, tsDef) end
+    end
+    if not r and not bundle then return false end
     local image, quads, aliasMap, blocksTable
-    if tileset then
+    if bundle then
+      image, quads, aliasMap, blocksTable =
+        bundle.image, bundle.quads, bundle.aliasMap, bundle.blocks
+    elseif tileset then
       image, quads, aliasMap, blocksTable =
         tileset.image, tileset.quads, tileset.aliasMap, tileset.blocks
     else
@@ -113,11 +125,29 @@ function Item.draw(session, item, x, y, boxSize, blueprints, tileset)
       return true
     end
     love.graphics.setColor(1, 1, 1, 1)
-    local scale = boxSize / 32
+    -- Full size x2: a sprite frame is 16x16, so render it at the box size
+    -- (the old code fit it into a 32px box, showing sprites at half scale).
+    local scale = boxSize / 16
+    local ox = (boxSize / scale - 16) / 2
+    local oy = (boxSize / scale - 16) / 2
     love.graphics.push()
     love.graphics.scale(scale, scale)
-    sr:draw(x / scale, y / scale + 8, 0, 0, "down", 0, false)
+    sr:draw(x / scale + ox, y / scale + oy, 0, 0, "down", 0, false)
     love.graphics.pop()
+    return true
+  end
+
+  if item.kind == "warp" then
+    -- Warp entries render as a blue-filled circle with a white ring, matching
+    -- the entity-marker style used in the world overlay (blue = warp).
+    love.graphics.setColor(0.2, 0.6, 1, 0.7)
+    love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+    love.graphics.setColor(1, 1, 1, 0.85)
+    love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+    love.graphics.setColor(1, 1, 1, 1)
+    if session.font then
+      session.font.draw("WARP", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+    end
     return true
   end
 

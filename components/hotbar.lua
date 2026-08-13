@@ -4,6 +4,7 @@
 
 local Common = require("mods.mapamap.func.common")
 local Item = require("mods.mapamap.components.item")
+local Text = require("mods.mapamap.components.text")
 
 local Hotbar = {}
 
@@ -43,8 +44,9 @@ function Hotbar.at(vw, vh, mx, my)
 end
 
 -- Draws the hotbar.  `slots` is the item array (Input.hotbar), `selected` the
--- active index, `font` the UI font.
-function Hotbar.draw(session, vw, vh, slots, selected, font)
+-- active index, `font` the UI font, `blueprints` the blueprint book array
+-- (fed to Item.draw so a blueprint slot resolves its stored grid).
+function Hotbar.draw(session, vw, vh, slots, selected, font, blueprints)
   local hx, hy, hw, hh = Hotbar.rect(vw, vh)
   love.graphics.setColor(0.05, 0.05, 0.08, 0.82)
   love.graphics.rectangle("fill", hx, hy, hw, hh)
@@ -66,8 +68,13 @@ function Hotbar.draw(session, vw, vh, slots, selected, font)
     if item then
       local pad = 3
       local size = h - pad * 2
-      Item.draw(session, item, x + pad, y + pad, size)
-      if font then font.draw(tostring(i), x + 2, y + 1) end
+      Item.draw(session, item, x + pad, y + pad, size, blueprints)
+      -- Slot number: big, black on a light chip so it reads over any tile.
+      if font then
+        Text.label(font, tostring(i), x + 2, y + 2, 2, {
+          bg = { 0.95, 0.95, 0.95, 0.88 }, padX = 2, padY = 0,
+        })
+      end
     end
   end
   love.graphics.setColor(1, 1, 1, 1)

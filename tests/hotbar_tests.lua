@@ -40,8 +40,8 @@ local VW, VH = 640, 576
 -- Centre of picker item cell `i` (1-based) in the picker grid.
 local function pickerCellCentre(i)
   local ix, iy, _, _ = PickerM.rect(VW, VH)
-  local cols = PickerM.cols(VW)
-  local gx = ix + PickerM.PAD + PickerM.LIST_W + PickerM.GAP
+  local cols = PickerM.cols(VW, VH)
+  local gx = ix + PickerM.PAD
   local gy = iy + PickerM.HEAD_H + 6
   local ci = i - 1
   local col = ci % cols
@@ -65,14 +65,21 @@ function test_pickerClickReplacesSelectedSlot()
   s:rebuildNeighbors()
   Input.showPicker = true
   Input.selected = 1
-  Input.hotbar[1] = { kind = "block", id = 1 }
+  -- A sentinel far outside any real block id, so the replacement is unambiguous
+  -- regardless of what PALLET_TOWN's tileset actually contains.
+  Input.hotbar[1] = { kind = "block", id = 9000 }
   -- Pick the second picker cell (a different block, or an item/NPC).
   local cx, cy = pickerCellCentre(2)
   local consumed = Input.mousepressed(s, game, cx, cy, 1)
   assert(consumed, "click on the picker grid should be consumed")
   assert(Input.hotbar[1] and Input.hotbar[1].kind == "block"
-    and Input.hotbar[1].id ~= 1, "click should replace the selected slot 1")
-  assert(Input.dragItem == nil, "a release-only click should clear the drag")
+    and Input.hotbar[1].id ~= 9000, "click should replace the selected slot 1")
+  -- A press arms a drag (same as any picker cell); releasing over the same
+  -- cell without dragging clears it.
+  assert(Input.dragItem, "pressing a picker cell should arm a drag")
+  local released = Input.mousereleased(s, cx, cy, 1)
+  assert(released, "release over the picker should be consumed")
+  assert(Input.dragItem == nil, "a dragless release should clear the drag")
 end
 
 function test_blueprintClickReplacesSelectedSlot()

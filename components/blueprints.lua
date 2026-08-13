@@ -6,6 +6,8 @@
 -- live camera transform (Coords).
 
 local Item = require("mods.mapamap.components.item")
+local Inventory = require("mods.mapamap.components.inventory")
+local Text = require("mods.mapamap.components.text")
 
 local Blueprints = {}
 
@@ -14,23 +16,27 @@ Blueprints.GAP = 6
 Blueprints.PAD = 10
 Blueprints.HEAD = 40   -- matches the picker's header row height
 
--- Panel rect: centered above the hotbar.  Width fits `perPage` current
--- entries, sized to the viewport so it never overruns the hotbar.
-function Blueprints.rect(vw, vh)
-  local available = vw * 0.66
-  local per = Blueprints.perPage(vw, vh)
-  local w = Blueprints.PAD * 2 + per * Blueprints.SLOT
-            + (per - 1) * Blueprints.GAP
-  w = math.max(w, math.min(available, Blueprints.SLOT * 5
-                                        + Blueprints.GAP * 4 + Blueprints.PAD * 2))
-  local x = math.floor((vw - w) / 2)
-  local y = vh - Blueprints.SLOT - 10 - Blueprints.HEAD - 8
-  return x, y, w, Blueprints.HEAD + Blueprints.SLOT + 8
+-- Truncates a label to fit `budgetPx` once drawn at `scale`.
+local function fitText(font, s, budgetPx, scale)
+  scale = scale or 2
+  local function w(t)
+    return ((font.width and font.width(t)) or (#t * 8)) * scale
+  end
+  if w(s) <= budgetPx then return s end
+  while #s > 0 and w(s) > budgetPx do s = s:sub(1, #s - 1) end
+  return s .. "..."
 end
 
--- Entries per page (a single row), based on the slot spacing.
+-- Panel rect: the same size as the inventory, sitting at its right side.
+function Blueprints.rect(vw, vh)
+  return Inventory.sideRect(vw, vh)
+end
+
+-- Entries per page (a single row), based on the side panel width.
 function Blueprints.perPage(vw, vh)
-  return math.max(1, math.floor((vw * 0.66) / (Blueprints.SLOT + Blueprints.GAP)))
+  local _, _, w = Inventory.sideRect(vw, vh)
+  return math.max(1, math.floor((w - Blueprints.PAD * 2 + Blueprints.GAP)
+    / (Blueprints.SLOT + Blueprints.GAP)))
 end
 
 -- Which blueprint index is under (mx,my), or nil.  scroll is a page number.
@@ -59,8 +65,12 @@ function Blueprints.draw(session, vw, vh, bp, scroll, font, selectedItem)
   love.graphics.rectangle("fill", ix, iy, iw, ih)
   love.graphics.setColor(0.55, 0.55, 0.6, 0.5)
   love.graphics.rectangle("line", ix, iy, iw, ih)
-  love.graphics.setColor(0.9, 0.9, 1, 0.9)
-  font.draw("Blueprints (B to close)  " .. tostring(#bp) .. " saved", ix + 6, iy + 8)
+  local head = fitText(font,
+    "BLUEPRINTS (B)  " .. tostring(#bp) .. " saved  pg " .. tostring(scroll),
+    iw - Blueprints.PAD * 2, 2)
+  Text.label(font, head, ix + Blueprints.PAD, iy + 6, 2, {
+    bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 3, padY = 2,
+  })
   love.graphics.setColor(1, 1, 1, 1)
   local mx, my = love.mouse.getPosition()
   local hoverIdx = Blueprints.itemAt(vw, vh, mx, my, scroll)

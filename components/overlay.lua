@@ -17,6 +17,7 @@ local Item = require("mods.mapamap.components.item")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Picker = require("mods.mapamap.components.picker")
 local Blueprints = require("mods.mapamap.components.blueprints")
+local Inventory = require("mods.mapamap.components.inventory")
 
 local Overlay = {}
 
@@ -110,7 +111,9 @@ function Overlay.draw(session, game, viewport)
   love.graphics.setColor(1, 1, 1, 1)
 
   drawCursor(session, game)
-  Hotbar.draw(session, vw, vh, Input.hotbar, Input.selected, session.font)
+  Inventory.draw(session, Input.inventory, vw, vh, session.font, Input.selectedItem(),
+    Input.blueprints)
+  Hotbar.draw(session, vw, vh, Input.hotbar, Input.selected, session.font, Input.blueprints)
   drawSelection(session, game)
   if Input.showBlueprints then
     Blueprints.draw(session, vw, vh, Input.blueprints, Input.blueprintScroll,
