@@ -18,6 +18,7 @@ local Save = require("mods.mapamap.func.save")
 local Snapshot = require("mods.mapamap.func.snapshot")
 local Common = require("mods.mapamap.func.common")
 local NewMap = require("mods.mapamap.func.new_map")
+local MapGrid = require("mods.mapamap.func.map_grid")
 local Hotbar = require("mods.mapamap.components.hotbar")
 
 local active = false
@@ -92,7 +93,6 @@ local function persistSession(mod, game)
   if not session then return end
   saveMapPatches(mod, session)
   Input.saveHotbar(mod)
-  Input.saveBlueprints(mod)
   Input.saveInventory(mod)
   session = nil
 end
@@ -111,6 +111,10 @@ local function openSession(mod, game)
     return nil
   end
   s:applySavedPatches()
+  -- Grid expansion runs on load (F6 open and every border cross): close every
+  -- open void within one hop so the world around the loaded map is fully tiled
+  -- before editing starts.  Painting never creates maps.
+  MapGrid.autofill(s, MapGrid.DEFAULT_DEPTH)
   -- Hotbar: restore a saved layout, else seed with the first few blocks.
   local saved = mod.save:get("mapamap_hotbar", nil)
   if saved and type(saved) == "table" and #saved > 0 then
@@ -126,7 +130,11 @@ local function openSession(mod, game)
     Input.saveHotbar(mod)
   end
   Input.applySelection(s)
-  Input.loadBlueprints(mod)
+  -- Lock block slots to this map's tileset immediately so crossing a border
+  -- never re-seeds them onto the incoming map's palette (tiles stay stable).
+  for i = 1, Hotbar.SLOTS do
+    Input.tagBlock(s, Input.hotbar[i])
+  end
   Input.loadInventory(mod)
   -- A fresh inventory starts seeded with the default hotbar blocks so the
   -- panel is never empty on first use.
@@ -156,6 +164,7 @@ local function reconcileSession(mod, game)
   local s = Session.new(mod, game, mapId)
   if not s then return end
   s:applySavedPatches()
+  MapGrid.autofill(s, MapGrid.DEFAULT_DEPTH)
   session = s
   -- Re-point picker/hotbar onto the incoming map's tileset.
   Input.onMapEntry(session)
@@ -235,36 +244,40 @@ return function(mod)
     end
   end
 
-  -- love.* mouse routing: when the overlay is active and the mouse is over
-  -- the game, the overlay consumes it so the vanilla game never sees paint
-  -- clicks.  We patch the love callbacks in main.lua space by wrapping the
-  -- existing functions.
-  local wrap = function(name, fn)
-    local loveOrig = love[name]
-    if not loveOrig then return end
-    love[name] = function(...)
-      if active and session and Input[name] then
-        local args = { ... }
-        reconcileSession(mod, session.game)
-        local consumed = fn(...)
-        if consumed then return end
+  -- Mouse routing: the mod sandbox blocks direct love.* assignment, so we
+  -- use the sanctioned input.pointer hook for press/release/move.  Wheel has
+  -- no pointer event, so we wrap the Game method directly (requires
+  -- engine_internals, already granted in the manifest).
+  mod.hooks:wrap("input.pointer", function(nextFn, game, ev)
+    if not (active and session) then return nextFn(game, ev) end
+    reconcileSession(mod, game)
+    if ev.source == "mouse" then
+      if ev.phase == "pressed" then
+        if Input.mousepressed(session, game, ev.x, ev.y, ev.button) then return true end
+      elseif ev.phase == "released" then
+        if Input.mousereleased(session, ev.x, ev.y, ev.button) then return true end
+      elseif ev.phase == "moved" then
+        if Input.mousemoved(session, ev.x, ev.y) then return true end
+      elseif ev.phase == "cancelled" then
+        -- Focus loss / input recovery retires every live pointer; clear the
+        -- mod's held buttons so the brush cannot stay armed without a release.
+        Input.cancelled()
       end
-      return loveOrig(...)
+    end
+    return nextFn(game, ev)
+  end)
+
+  do
+    local Game = require("src.core.Game")
+    local origWheel = Game.wheelmoved
+    function Game:wheelmoved(dx, dy)
+      if active and session then
+        reconcileSession(mod, session.game)
+        if Input.wheelmoved(session, dy) then return end
+      end
+      if origWheel then return origWheel(self, dx, dy) end
     end
   end
-
-  wrap("mousepressed", function(x, y, button)
-    return Input.mousepressed(session, session.game, x, y, button)
-  end)
-  wrap("mousereleased", function(x, y, button)
-    return Input.mousereleased(session, x, y, button)
-  end)
-  wrap("mousemoved", function(x, y)
-    return Input.mousemoved(session, x, y)
-  end)
-  wrap("wheelmoved", function(x, y)
-    return Input.wheelmoved(session, y)
-  end)
 
   -- Auto-save on quit, and on save.loaded replay any saved map patches (like
   -- map_editor does) so edits survive a reload.
