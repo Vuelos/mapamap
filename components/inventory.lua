@@ -12,7 +12,6 @@
 -- draw routine, mirroring the Hotbar/Picker component style.  Input queries
 -- it for hit-testing; the overlay orchestrator only calls Inventory.draw.
 
-local Common = require("mods.mapamap.func.common")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Item = require("mods.mapamap.components.item")
 local Text = require("mods.mapamap.components.text")
@@ -137,17 +136,40 @@ function Inventory.listFor(items, tab)
   return out
 end
 
+-- The panel's display list for the active tab. Inventory is only the saved
+-- collection; live current-map content is owned by separate components.
+function Inventory.tabList(session, state)
+  local tab = (state and state.tab) or 1
+  return Inventory.listFor(state and state.items, tab)
+end
+
+-- Adds an item to the inventory, switching to its tab and scrolling so the
+-- newest entry is visible.
+function Inventory.add(ui, item)
+  if not item then return end
+  table.insert(ui.inventory.items, item)
+  local tabIdx = Inventory.tabFor(item)
+  ui.inventory.tab = tabIdx
+  local vw, vh = love.graphics.getDimensions()
+  local list = Inventory.listFor(ui.inventory.items, tabIdx)
+  local per = Inventory.perPage(vw, vh)
+  ui.inventory.scroll = math.max(1, math.ceil(#list / per))
+end
+
+-- The filtered inventory list for the active tab of the UI controller state.
+function Inventory.list(ui)
+  return Inventory.listFor(ui.inventory.items, ui.inventory.tab)
+end
+
 -- ---------------------------------------------------------------------------
 -- Draw
 
 -- Draws the panel.  `state` carries the Input-owned UI state
 -- { items, tab, scroll } and `selectedItem` is the active hotbar item (for
--- the selection ring); `blueprints` is the blueprint book array (fed to
--- Item.draw so captured blueprints paint their grid in the grid cells).
--- Styling matches the tileset picker.
-function Inventory.draw(session, state, vw, vh, font, selectedItem, blueprints)
-  local tab = state.tab or 1
-  local list = Inventory.listFor(state.items, tab)
+-- the selection ring).  Styling matches the tileset picker.
+function Inventory.draw(session, state, vw, vh, font, selectedItem)
+  local tab = (state and state.tab) or 1
+  local list = Inventory.tabList(session, state)
   local px, py, pw, ph = Inventory.rect(vw, vh)
 
   love.graphics.setColor(0, 0, 0, 0.85)
@@ -155,22 +177,22 @@ function Inventory.draw(session, state, vw, vh, font, selectedItem, blueprints)
   love.graphics.setColor(0.55, 0.55, 0.6, 0.5)
   love.graphics.rectangle("line", px, py, pw, ph)
 
-  -- Tab row.
+  -- Tab row: single light chip per tab (no dark button rectangle behind it);
+  -- the active tab gets a blue outline so the selected category still reads.
   local mx, my = love.mouse.getPosition()
   local hoverTab = Inventory.tabAt(vw, vh, mx, my)
   for i = 1, #Inventory.TABS do
     local x, y, w, h = Inventory.tabRect(vw, vh, i)
-    love.graphics.setColor(0.22, 0.22, 0.26, 0.9)
-    if i == tab then
-      love.graphics.setColor(1, 1, 1, 0.16)
-    elseif hoverTab == i then
-      love.graphics.setColor(1, 1, 1, 0.08)
-    end
-    love.graphics.rectangle("fill", x, y, w, h)
-    -- Big, high-contrast tab label (dark ink on a light chip).
     Text.label(font, Inventory.TABS[i].label, x + 4, y + 3, 2, {
       bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 2, padY = 1,
     })
+    if i == tab then
+      love.graphics.setColor(0.25, 0.5, 1, 0.9)
+      love.graphics.rectangle("line", x + 1, y + 1, w - 2, h - 2)
+    elseif hoverTab == i then
+      love.graphics.setColor(1, 1, 1, 0.9)
+      love.graphics.rectangle("line", x + 1, y + 1, w - 2, h - 2)
+    end
   end
 
   -- Item grid.
@@ -190,8 +212,7 @@ function Inventory.draw(session, state, vw, vh, font, selectedItem, blueprints)
       love.graphics.rectangle("fill", cellX, cellY, Inventory.SLOT, Inventory.SLOT)
       if item then
         local pad = 2
-        Item.draw(session, item, cellX + pad, cellY + pad, Inventory.SLOT - pad * 2,
-          blueprints)
+        Item.draw(session, item, cellX + pad, cellY + pad, Inventory.SLOT - pad * 2)
         if hoverIdx == slot then
           love.graphics.setColor(1, 1, 1, 0.95)
           love.graphics.rectangle("line", cellX - 1, cellY - 1,

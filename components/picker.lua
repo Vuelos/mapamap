@@ -1,13 +1,12 @@
--- Tileset picker component: the panel to the inventory's right with a
--- scrollable row of tileset-name chips across the top and a grid of the active
--- category below.
+-- Tileset picker component: the panel to the inventory's right with a tileset
+-- dropdown at the top and a grid of the active category below.
 --
--- The chips are a mixed catalog: a virtual "Items & NPCs" entry first, then
--- every real tileset (the current map's tileset kept default / highlighted).
--- Selecting a real tileset shows its blocks; selecting the virtual entry shows
--- the NPC sprite catalog.
+-- The dropdown entry is a mixed catalog: a virtual "Items & NPCs" entry first,
+-- then every real tileset (the current map's tileset kept default /
+-- highlighted).  Selecting a real tileset shows its blocks; selecting the
+-- virtual entry shows the NPC sprite catalog.
 --
--- This module owns all picker geometry (panel, chip row, grid), the catalog
+-- This module owns all picker geometry (panel, dropdown, grid), the catalog
 -- ordering, and the draw routine.  Input queries it for hit-testing; the
 -- overlay orchestrator only calls Picker.draw.
 
@@ -28,11 +27,10 @@ Picker.PAD = Inventory.PAD
 Picker.SLOT = Inventory.SLOT
 Picker.GAP = Inventory.GAP
 Picker.COLS = Inventory.COLS
-Picker.CHIP_H = 24      -- height of a tileset-name chip
-Picker.CHIP_W = 64      -- nominal chip width (names clip to fit)
+Picker.DROP_H = 24      -- height of the tileset dropdown rows
 
--- Header rows: padding, title text (2x = 16px), gap, chip row.
-Picker.HEAD_H = Picker.PAD + 16 + 6 + Picker.CHIP_H
+-- Header rows: padding, title text (2x = 16px), gap, dropdown row.
+Picker.HEAD_H = Picker.PAD + 16 + 6 + Picker.DROP_H
 
 -- Truncates a label to fit `budgetPx` of love screen width once drawn at
 -- `scale` (glyphs measure against the real Font.width, halved back for scale).
@@ -84,29 +82,46 @@ function Picker.itemAt(vw, vh, mx, my, scroll)
   return pageStart + row * cols + col + 1
 end
 
--- Bounding rect of the horizontal tileset-name chip row.
-function Picker.listRect(vw, vh)
+-- Bounding rect of the closed tileset dropdown button (fills the header band
+-- below the title).
+function Picker.dropRect(vw, vh)
   local px, py, pw, _ = Picker.rect(vw, vh)
-  local y = py + Picker.PAD + 16 + 6
-  return px + Picker.PAD, y, pw - Picker.PAD * 2, Picker.CHIP_H
+  return px + Picker.PAD, py + Picker.PAD + 16 + 6, pw - Picker.PAD * 2, Picker.DROP_H
 end
 
--- How many tileset chips fit across the panel.
-function Picker.namesPerPage(vw, vh)
-  local _, _, w, _ = Picker.listRect(vw, vh)
-  return math.max(1, math.floor((w + Picker.GAP) / (Picker.CHIP_W + Picker.GAP)))
+-- True when a screen point is on the dropdown button.
+function Picker.dropAt(vw, vh, mx, my)
+  local x, y, w, h = Picker.dropRect(vw, vh)
+  return mx >= x and mx < x + w and my >= y and my < y + h
 end
 
--- Index (1-based, into the catalog) of the chip under (mx,my) for the given
--- scroll page, or nil.
-function Picker.nameAt(vw, vh, mx, my, scroll)
-  local x, y, _, h = Picker.listRect(vw, vh)
-  if mx < x or mx >= x + Picker.CHIP_W * Picker.namesPerPage(vw, vh)
-     or my < y or my >= y + h then return nil end
-  local per = Picker.namesPerPage(vw, vh)
-  local idx = math.floor((mx - x) / (Picker.CHIP_W + Picker.GAP)) + 1
-  if idx < 1 or idx > per then return nil end
-  return ((scroll or 1) - 1) * per + idx
+-- How many catalog entries fit in the open list (bounded by the panel).
+function Picker.dropPerPage(session, vw, vh)
+  local _, py, _, ph = Picker.rect(vw, vh)
+  local _, by, _, _ = Picker.dropRect(vw, vh)
+  local top = by + Picker.DROP_H + Picker.GAP
+  local avail = (py + ph) - top - Picker.PAD
+  local per = math.floor(avail / (Picker.DROP_H + 2))
+  return math.max(1, per)
+end
+
+-- Bounding rect of the open dropdown list (directly below the button, drawn
+-- over the grid).
+function Picker.dropListRect(session, vw, vh)
+  local x, y, w, _ = Picker.dropRect(vw, vh)
+  return x, y + Picker.DROP_H + Picker.GAP, w,
+    Picker.dropPerPage(session, vw, vh) * Picker.DROP_H
+end
+
+-- Catalog entry index (1-based, into the catalog) under (mx,my) in the open
+-- list, or nil.  `page` is a page number (1-based).
+function Picker.dropEntryAt(session, vw, vh, mx, my, page)
+  local x, y, w, h = Picker.dropListRect(session, vw, vh)
+  if mx < x or mx >= x + w or my < y or my >= y + h then return nil end
+  local row = math.floor((my - y) / Picker.DROP_H) + 1
+  local per = Picker.dropPerPage(session, vw, vh)
+  if row < 1 or row > per then return nil end
+  return ((page or 1) - 1) * per + row
 end
 
 -- ---------------------------------------------------------------------------
@@ -200,7 +215,7 @@ end
 -- Draw
 
 -- Draws the picker panel.  `state` carries the Input-owned UI state
--- { selection, scroll, listScroll, perPage }.
+-- { selection, scroll, listScroll = dropdown page, dropOpen }.
 function Picker.draw(session, vw, vh, state, font)
   local app = state or {}
   local selection = app.selection -- may be nil = default to current map
@@ -231,43 +246,23 @@ function Picker.draw(session, vw, vh, state, font)
   Text.label(font, head, ix + Picker.PAD, iy + 6, 2, {
     bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 3, padY = 2,
   })
-
-  -- Chip row: horizontal, scrollable tileset selector (like the inventory's
-  -- tabs).  High-contrast chips, the active one bold with a border.
-  local cx, cy, cw, ch = Picker.listRect(vw, vh)
-  love.graphics.setColor(0, 0, 0, 0.6)
-  love.graphics.rectangle("fill", cx, cy, cw, ch)
+  love.graphics.setColor(1, 1, 1, 1)
   local mx, my = love.mouse.getPosition()
-  local hoverIdx = Picker.nameAt(vw, vh, mx, my, app.listScroll or 1)
-  local perTs = Picker.namesPerPage(vw, vh)
-  local pageStart = ((app.listScroll or 1) - 1) * perTs
-  for i = 1, perTs do
-    local idx = pageStart + i
-    local x = cx + (i - 1) * (Picker.CHIP_W + Picker.GAP)
-    local cid = catalog[idx]
-    if not cid then break end
-    local isActive = (cid == active) and not (cid == Picker.SPEC)
-    if cid == Picker.SPEC and selection == Picker.SPEC then isActive = true end
-    local isHover = (hoverIdx == idx)
-    love.graphics.setColor(0.3, 0.3, 0.35, 0.9)
-    if isActive then
-      love.graphics.setColor(0.35, 0.55, 0.95, 0.9)
-    elseif isHover then
-      love.graphics.setColor(1, 1, 1, 0.12)
-    end
-    love.graphics.rectangle("fill", x, cy + 1, Picker.CHIP_W, ch - 2)
-    local clipped = fitText(font, Picker.label(session, cid), Picker.CHIP_W - 8, 2)
-    if isActive then
-      Text.label(font, clipped, x + 4, cy + 3, 2, {
-        bg = { 0.95, 0.95, 0.95, 0.95 }, padX = 2, padY = 1,
-      })
-      love.graphics.setColor(1, 1, 1, 0.9)
-      love.graphics.rectangle("line", x + 1, cy + 1, Picker.CHIP_W - 2, ch - 2)
-    else
-      Text.label(font, clipped, x + 4, cy + 3, 2, {
-        bg = { 0.92, 0.92, 0.95, 0.75 }, padX = 2, padY = 1,
-      })
-    end
+
+  -- Tileset dropdown: a single button showing the active catalog entry; the
+  -- open list is drawn over the grid below.
+  local dropX, dropY, dropW, dropH = Picker.dropRect(vw, vh)
+  Text.label(font, fitText(font, activeLabel, dropW - 24, 2),
+    dropX + 4, dropY + 3, 2, { bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 3, padY = 2 })
+  -- Down-chevron on the button's right end.
+  love.graphics.setColor(0.05, 0.05, 0.09, 1)
+  love.graphics.polygon("fill",
+    dropX + dropW - 16, dropY + 6,
+    dropX + dropW - 8, dropY + 6,
+    dropX + dropW - 12, dropY + dropH - 7)
+  if app.dropOpen or Picker.dropAt(vw, vh, mx, my) then
+    love.graphics.setColor(0.35, 0.55, 0.95, 0.9)
+    love.graphics.rectangle("line", dropX, dropY, dropW, dropH)
   end
   love.graphics.setColor(1, 1, 1, 1)
 
@@ -289,7 +284,7 @@ function Picker.draw(session, vw, vh, state, font)
       local item = list[slot]
       love.graphics.setColor(0.22, 0.22, 0.26, 0.92)
       love.graphics.rectangle("fill", gx, gy, Picker.SLOT, Picker.SLOT)
-      Item.draw(session, item, gx + 2, gy + 2, Picker.SLOT - 4, nil, thumbBundle)
+      Item.draw(session, item, gx + 2, gy + 2, Picker.SLOT - 4, thumbBundle)
       -- white ring on hover, red ring on the selected hotbar item
       if hoverItem == slot then
         love.graphics.setColor(1, 1, 1, 0.95)
@@ -309,6 +304,38 @@ function Picker.draw(session, vw, vh, state, font)
     row = row + 1
   end
   love.graphics.setColor(1, 1, 1, 1)
+
+  -- Open tileset dropdown list (drawn over the grid).
+  if app.dropOpen then
+    local lx, ly, lw, lh = Picker.dropListRect(session, vw, vh)
+    love.graphics.setColor(0, 0, 0, 0.94)
+    love.graphics.rectangle("fill", lx, ly, lw, lh)
+    love.graphics.setColor(0.55, 0.55, 0.6, 0.5)
+    love.graphics.rectangle("line", lx, ly, lw, lh)
+    local per = Picker.dropPerPage(session, vw, vh)
+    local pageStart = ((app.listScroll or 1) - 1) * per
+    local hoverEntry = Picker.dropEntryAt(session, vw, vh, mx, my, app.listScroll or 1)
+    local activeSel = selection or Picker.current(session)
+    for i = 1, per do
+      local idx = pageStart + i
+      local cid = catalog[idx]
+      if not cid then break end
+      local ey = ly + (i - 1) * Picker.DROP_H
+      local isSel = (cid == activeSel) and cid ~= Picker.SPEC
+      if cid == Picker.SPEC and selection == Picker.SPEC then isSel = true end
+      -- Single light chip per entry (no dark button rectangle behind it).
+      Text.label(font, fitText(font, Picker.label(session, cid), lw - 12, 2),
+        lx + 4, ey + 2, 2, { bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 2, padY = 1 })
+      if isSel then
+        love.graphics.setColor(0.25, 0.5, 1, 0.9)
+        love.graphics.rectangle("line", lx + 1, ey + 1, lw - 2, Picker.DROP_H - 2)
+      elseif hoverEntry == idx then
+        love.graphics.setColor(1, 1, 1, 0.9)
+        love.graphics.rectangle("line", lx + 1, ey + 1, lw - 2, Picker.DROP_H - 2)
+      end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+  end
 end
 
 return Picker

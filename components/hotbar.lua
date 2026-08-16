@@ -43,10 +43,87 @@ function Hotbar.at(vw, vh, mx, my)
   return nil
 end
 
+-- ---------------------------------------------------------------------------
+-- Selection model
+
+-- Locks a block item to the tileset its numeric id belongs to.  Without a
+-- source tag a block id is only meaningful inside one tileset, so crossing a
+-- map border would silently reinterpret it; tagging keeps the SAME visual tile
+-- and lets apply/paintAt graft it when the target map uses another tileset.
+-- Mutates in place (drag/drop keeps reference identity) and returns the item.
+function Hotbar.tag(session, item)
+  if item and item.kind == "block" and not item.srcTileset and not item.tileset
+     and session and session.tileset then
+    item.tileset = session.tileset.id
+  end
+  return item
+end
+
+-- The currently selected hotbar item.
+function Hotbar.selected(ui)
+  return ui.hotbar[ui.selected]
+end
+
+-- Sets the session's paint target from the selected hotbar slot.  Returns
+-- true when a valid item is selected.
+function Hotbar.apply(ui, session)
+  local item = Hotbar.selected(ui)
+  if not item then return false end
+  Hotbar.tag(session, item)
+  if item.kind == "sprite" then
+    session.selectedSprite = item.id
+  elseif item.kind == "item" or item.kind == "blueprint"
+         or item.kind == "warp" or item.kind == "object" then
+    -- Warp/object tools place entities and never map to a block/sprite brush.
+    session.selectedSprite = nil
+    session.selectedBlock = nil
+  else
+    local blockId = item.id
+    local srcTileset = item.srcTileset or item.tileset
+    if srcTileset and srcTileset ~= session.tileset.id then
+      local gid = session:importBlock(srcTileset, blockId)
+      if gid == nil then return false end
+      blockId = gid
+      session._needsGraftRebuild = true
+    end
+    session.selectedBlock = blockId
+    session.selectedSprite = nil
+  end
+  return true
+end
+
+-- Loads an inventory cell into the selected hotbar slot.  A live warp / object
+-- cell arms the copy tool for that entry (plus the fresh-NPC / new-warp
+-- templates); everything else loads as-is.
+function Hotbar.loadItem(ui, session, item)
+  if not item then return end
+  if item.kind == "warp" then
+    if item.newWarp then
+      ui.hotbar[ui.selected] = { kind = "warp", newWarp = true }
+    else
+      ui.hotbar[ui.selected] =
+        { kind = "warp", destMap = item.destMap, destWarp = item.destWarp,
+          warp = item.warp }
+      session.selectedWarp = item.warp
+    end
+  elseif item.kind == "object" then
+    -- A live map object loads a copy tool; the template arms a fresh object
+    -- creator.
+    if item.newObject then
+      ui.hotbar[ui.selected] = { kind = "object", newObject = true }
+    else
+      ui.hotbar[ui.selected] = { kind = "object", obj = item.obj }
+      session.selectedObject = item.obj
+    end
+  else
+    ui.hotbar[ui.selected] = item
+  end
+  Hotbar.apply(ui, session)
+end
+
 -- Draws the hotbar.  `slots` is the item array (Input.hotbar), `selected` the
--- active index, `font` the UI font, `blueprints` the blueprint book array
--- (fed to Item.draw so a blueprint slot resolves its stored grid).
-function Hotbar.draw(session, vw, vh, slots, selected, font, blueprints)
+-- active index, `font` the UI font.
+function Hotbar.draw(session, vw, vh, slots, selected, font)
   local hx, hy, hw, hh = Hotbar.rect(vw, vh)
   love.graphics.setColor(0.05, 0.05, 0.08, 0.82)
   love.graphics.rectangle("fill", hx, hy, hw, hh)
@@ -68,7 +145,7 @@ function Hotbar.draw(session, vw, vh, slots, selected, font, blueprints)
     if item then
       local pad = 3
       local size = h - pad * 2
-      Item.draw(session, item, x + pad, y + pad, size, blueprints)
+      Item.draw(session, item, x + pad, y + pad, size)
       -- Slot number: big, black on a light chip so it reads over any tile.
       if font then
         Text.label(font, tostring(i), x + 2, y + 2, 2, {
