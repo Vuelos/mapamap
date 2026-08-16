@@ -15,6 +15,7 @@ local Session = require("mods.mapamap.session")
 local Input = require("mods.mapamap.input")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Inventory = require("mods.mapamap.components.inventory")
+local MapOps = require("mods.mapamap.func.map_ops")
 
 local mod = {
   log = { warn = function() end, info = function() end, error = function() end },
@@ -27,12 +28,9 @@ local function resetInput()
   Input.hotbar = {}
   Input.selected = 1
   Input.showPicker = false
-  Input.showBlueprints = false
   Input.pickerScroll = 1
   Input.pickerTilesetScroll = 1
   Input.dragItem = nil
-  Input.blueprintScroll = 1
-  Input.blueprints = {}
   Input.inventory = { items = {}, tab = 1, scroll = 1 }
 end
 
@@ -115,13 +113,46 @@ function test_listFor_filtersByTab()
   assert(#blueprints == 1 and blueprints[1].id == "bp_1", "Blueprints tab shows blueprints")
 end
 
+function test_tabListShowsOnlySavedItems()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  resetInput()
+  s.def.blocks = { 5, 5, 5, 0 }
+  Input.inventory = { items = {
+    { kind = "block", id = 7 }, { kind = "block", id = 8 },
+  }, tab = 1, scroll = 1 }
+  local list = Input.inventoryList(s)
+  assert(list[1].kind == "block" and list[1].id == 7,
+    "the saved collection is shown")
+  assert(list[1].tileset == nil, "saved tile has no tileset tag")
+  assert(#list == 2 and list[2].id == 8,
+    "current-map tiles are not mixed into inventory")
+end
+
+function test_tabListEmptyWhenNoSavedItems()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  resetInput()
+  s.def.blocks = { 3, 3 }
+  Input.inventory = { items = {}, tab = 1, scroll = 1 }
+  assert(#Input.inventoryList(s) == 0,
+    "live current-map tiles do not populate inventory")
+end
+
 function test_inventoryCellLoadsIntoActiveSlot()
   local s = Session.new(mod, game, "PALLET_TOWN")
   assert(s, "no session")
   resetInput()
   Input.hotbar[1] = { kind = "block", id = 1 }
   Input.inventory = { items = { { kind = "block", id = 7 } }, tab = 1, scroll = 1 }
-  local cx, cy = inventoryCellCentre(1)
+  -- The stored item sits in the saved inventory grid; click its actual cell.
+  local target = nil
+  for i, cell in ipairs(Input.inventoryList(s)) do
+    if cell == Input.inventory.items[1] then target = i break end
+  end
+  assert(target, "stored item should appear in the tab list")
+  local per = Inventory.perPage(VW, VH)
+  Input.inventory.scroll = math.floor((target - 1) / per) + 1
+  local onPage = target - (Input.inventory.scroll - 1) * per
+  local cx, cy = inventoryCellCentre(onPage)
   local consumed = Input.mousepressed(s, game, cx, cy, 1)
   assert(consumed, "click on an inventory cell should be consumed")
   assert(Input.hotbar[1] and Input.hotbar[1].kind == "block"
@@ -174,8 +205,10 @@ function test_wheelScrollsInventoryPage()
   local ok = Input.wheelmoved(s, 1)
   _G.love.mouse.getPosition = orig
   assert(ok and Input.inventory.scroll > 1, "wheel over the panel scrolls a page")
-  -- Clamps at the last page: keep scrolling must not overflow.
-  local max = math.ceil(#Input.inventory.items / per)
+  -- Clamps at the last page: keep scrolling must not overflow.  The list
+  -- measure the real saved-item list.
+  local list = Input.inventoryList(s)
+  local max = math.ceil(#list / per)
   _G.love.mouse.getPosition = function() return cx, cy end
   Input.wheelmoved(s, 1)
   _G.love.mouse.getPosition = orig
@@ -202,6 +235,139 @@ function test_blueprintCaptureAddsToInventory()
   assert(Input.inventory.tab == 4, "capture should switch to the Blueprints tab")
 end
 
+function test_blueprintCaptureCanSpanVisibleMaps()
+  resetInput()
+  local root = { width = 2, height = 1, tileset = "TS_A", blocks = { 1, 2 } }
+  local east = { width = 2, height = 1, tileset = "TS_A", blocks = { 3, 4 } }
+  local session = {
+    def = root,
+    neighbors = { { id = "EAST", def = east, ox = 64, oy = 0 } },
+  }
+  Input.selectStart = { bx = 1, by = 0 }
+  Input.selectEnd = { bx = 2, by = 0 }
+  local id = Input.captureBlueprint(session)
+  assert(id, "capture should produce a blueprint")
+  local bp = Input.inventory.items[1]
+  assert(bp and bp.kind == "blueprint" and bp.w == 2 and bp.h == 1,
+    "captured blueprint keeps the world-block rectangle")
+  assert(bp.tiles[1].id == 2 and bp.tiles[1].tileset == "TS_A"
+    and bp.tiles[2].id == 3 and bp.tiles[2].tileset == "TS_A",
+    "capture reads from root then visible neighbor across the seam")
+end
+
+function test_blueprintPaintCanSpanVisibleMaps()
+  local root = { width = 2, height = 1, blocks = { 0, 0 } }
+  local east = { width = 2, height = 1, blocks = { 0, 0 } }
+  local rebuilt = { root = 0, east = 0 }
+  local session = {
+    def = root,
+    neighbors = { { id = "EAST", def = east, ox = 64, oy = 0 } },
+    neighborMaps = { EAST = { renderer = { rebuild = function() rebuilt.east = rebuilt.east + 1 end } } },
+    neighborDirty = {},
+    map = { renderer = { rebuild = function() rebuilt.root = rebuilt.root + 1 end } },
+    cursorBx = 2,
+    cursorBy = 0,
+  }
+  local changed = MapOps.paintBlueprint(session, { w = 2, h = 1, tiles = { 7, 8 } })
+  assert(changed, "stamp should change visible map cells")
+  assert(root.blocks[2] == 7 and east.blocks[1] == 8,
+    "stamp writes root and neighbor cells according to world-block placement")
+  assert(session.neighborDirty.EAST == true, "neighbor stamp is marked dirty")
+  assert(rebuilt.root > 0 and rebuilt.east > 0, "touched renderers are rebuilt")
+end
+
+function test_tabToggleHidesAndShowsInventory()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  assert(Input.showInventory == true, "inventory is visible by default")
+  local consumed = Input.keypressed(s, "tab")
+  assert(consumed, "TAB key should be consumed")
+  assert(Input.showInventory == false, "TAB should hide the inventory")
+  local consumed2 = Input.keypressed(s, "tab")
+  assert(consumed2, "second TAB should be consumed")
+  assert(Input.showInventory == true, "second TAB should show the inventory again")
+end
+
+function test_cursorOnlyActiveWhileMouseIsDown()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  assert(Input.mouseButtons[1] == false, "cursor state starts idle")
+  Input.mousepressed(s, game, 10, 10, 1)
+  assert(Input.mouseButtons[1] == true, "mouse press arms the cursor")
+  Input.mousereleased(s, 10, 10, 1)
+  assert(Input.mouseButtons[1] == false, "mouse release clears the cursor")
+end
+
+function test_stringMouseButtonsAreNormalized()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  Input.mousepressed(s, game, 10, 10, "left")
+  assert(Input.mouseButtons[1] == true, "left button is normalized to 1")
+  Input.mousereleased(s, 10, 10, "left")
+  assert(Input.mouseButtons[1] == false, "release clears the normalized left button")
+  Input.mousepressed(s, game, 10, 10, "right")
+  assert(Input.mouseButtons[2] == true, "right button is normalized to 2")
+end
+
+function test_wheelOverWorldPassesThroughForGameZoom()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  local orig = love.mouse.getPosition
+  _G.love.mouse.getPosition = function() return 540, 280 end
+  local ok = Input.wheelmoved(s, 1)
+  _G.love.mouse.getPosition = orig
+  assert(ok == false, "wheel over the world should not consume the overlay scroll")
+end
+
+function test_blueprintDragCreatesBlueprintFromInputFlow()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  Input.blueprintMode = true
+  local orig = Input.blockCellAt
+  Input.blockCellAt = function() return 0, 0 end
+  assert(Input.mousepressed(s, game, 1, 1, 1) == true,
+    "press starts a blueprint selection")
+  Input.blockCellAt = function() return 1, 1 end
+  assert(Input.mousemoved(s, 1, 1) == true,
+    "drag updates the blueprint selection")
+  Input.blockCellAt = function() return 1, 1 end
+  local id = Input.mousereleased(s, 1, 1, 1)
+  Input.blockCellAt = orig
+  assert(id == true, "release finishes the blueprint capture")
+  assert(#Input.inventory.items > 0, "drag release should add a blueprint")
+  assert(Input.inventory.tab == 4, "blueprints tab should be active after capture")
+end
+
+function test_blueprintTwoClickCreatesBlueprintAndClosesTool()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  Input.blueprintMode = true
+  local orig = Input.blockCellAt
+  Input.blockCellAt = function() return 0, 0 end
+  assert(Input.mousepressed(s, game, 1, 1, 1) == true,
+    "first click anchors the start corner")
+  -- A release with no drag in between must NOT capture yet (waits for 2nd click).
+  Input.blockCellAt = orig
+  assert(Input.mousereleased(s, 1, 1, 1) == true,
+    "release without a drag is still consumed")
+  assert(#Input.inventory.items == 0, "no blueprint until the second click")
+  assert(Input.blueprintMode == true, "the R tool stays open after the first click")
+  Input.blockCellAt = function() return 1, 1 end
+  local id = Input.mousepressed(s, game, 1, 1, 1)
+  Input.blockCellAt = orig
+  assert(id == true, "second click finishes the blueprint capture")
+  assert(#Input.inventory.items > 0, "two-click capture should add a blueprint")
+  assert(Input.blueprintMode == false,
+    "the R tool should close after the second click")
+end
+
+
 return {
   name = "MAPAMAP_INVENTORY",
   tests = {
@@ -210,10 +376,20 @@ return {
     "test_itemAt_cellGrid",
     "test_tabAt_fit",
     "test_listFor_filtersByTab",
+    "test_tabListShowsOnlySavedItems",
+    "test_tabListEmptyWhenNoSavedItems",
     "test_inventoryCellLoadsIntoActiveSlot",
     "test_tabClickSwitchesTab",
     "test_dragDropOntoInventoryAddsItem",
     "test_wheelScrollsInventoryPage",
     "test_blueprintCaptureAddsToInventory",
+    "test_blueprintCaptureCanSpanVisibleMaps",
+    "test_blueprintPaintCanSpanVisibleMaps",
+    "test_tabToggleHidesAndShowsInventory",
+    "test_cursorOnlyActiveWhileMouseIsDown",
+    "test_stringMouseButtonsAreNormalized",
+    "test_wheelOverWorldPassesThroughForGameZoom",
+    "test_blueprintDragCreatesBlueprintFromInputFlow",
+    "test_blueprintTwoClickCreatesBlueprintAndClosesTool",
   },
 }

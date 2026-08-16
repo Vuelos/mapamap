@@ -11,6 +11,7 @@ if not _G.love then _G.love = require("tests.love_stub") end
 
 local SUITES = {
   require("mods.mapamap.tests.connection_tests"),
+  require("mods.mapamap.tests.grid_tests"),
   require("mods.mapamap.tests.coords_tests"),
   require("mods.mapamap.tests.picker_tests"),
   require("mods.mapamap.tests.picker_render_tests"),
@@ -19,6 +20,8 @@ local SUITES = {
   require("mods.mapamap.tests.graft_tests"),
   require("mods.mapamap.tests.graft_resolve_tests"),
   require("mods.mapamap.tests.graft_palette_tests"),
+  require("mods.mapamap.tests.warp_tests"),
+  require("mods.mapamap.tests.object_tests"),
 }
 
 local allOk = true
