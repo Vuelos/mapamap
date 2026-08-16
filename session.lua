@@ -370,28 +370,6 @@ function Session:graftBlock(srcTileset, srcBlock)
   return id
 end
 
--- Grows the current map's dimension (width or height) so it matches the map
--- directly opposite `side`, following the expand-vs-create rule.  Draws the
--- grow toward the opposite edge so the source boundary/connection offsets stay
--- anchored at 0 (north/south grow on the width, west/east grow on the height).
--- Returns true when the map was enlarged.
-function Session:growToOppositeSide(side)
-  local NewMap = require("mods.mapamap.func.new_map")
-  local dim = NewMap.parallelDim(side)
-  local opp = NewMap.oppositeDef(self, side)
-  if not opp then return false end
-  local cur = self.def[dim] or 0
-  local want = opp[dim] or 0
-  if want <= cur then return false end
-  local delta = want - cur
-  if dim == "width" then
-    self:expandMap(0, delta, 0, 0)
-  else
-    self:expandMap(0, 0, 0, delta)
-  end
-  return true
-end
-
 -- Splits the session onto a freshly created map (from NewMap.createSidedMap):
 -- records the source map's pending state, loads the new map, and re-bases the
 -- session on it.  Returns the new map id, or nil.
@@ -425,6 +403,276 @@ function Session:adoptNewMap(newId)
   return newId
 end
 
+-- --- warp editing ------------------------------------------------------------
+
+-- The warp wired at a walk-grid cell on the edited map, or nil.  Coordinates
+-- are walk-grid cells (px = x*16), like objects.
+function Session:warpAt(cellX, cellY)
+  for _, w in ipairs(self.def.warps or {}) do
+    if (w.x or -1) == cellX and (w.y or -1) == cellY then return w end
+  end
+  return nil
+end
+
+-- Every warp on every visible laid-out map (the edited map plus the neighbor
+-- set), flattened with its map's world-pixel offset so the overlay can project
+-- them all onto the shared world.  Returns { { warp, ox, oy }, ... }; only the
+-- edited map's warps (ox = 0, oy = 0) can ever be the live selection.
+function Session:visibleWarps()
+  local out = {}
+  local function collect(def, ox, oy)
+    for _, w in ipairs(def and def.warps or {}) do
+      out[#out + 1] = { warp = w, ox = ox, oy = oy }
+    end
+  end
+  collect(self.def, 0, 0)
+  for _, nb in ipairs(self.neighbors or {}) do
+    collect(nb.def, nb.ox, nb.oy)
+  end
+  return out
+end
+
+-- The 1-based position of `warp` in the edited map's warps array (the engine
+-- numbers warps by array index), or nil.
+function Session:warpIndex(warp)
+  for i, w in ipairs(self.def.warps or {}) do
+    if w == warp then return i end
+  end
+  return nil
+end
+
+-- Bounds check for a walk-grid cell against a map def.
+local function cellIn(def, x, y)
+  return x >= 0 and y >= 0 and x < def.width * 2 and y < def.height * 2
+end
+
+-- Places a new warp at `cellX, cellY` leading to `destMap` warp number
+-- `destWarp` (0-based, the engine's numbering).  Returns the warp or nil.
+function Session:placeWarp(cellX, cellY, destMap, destWarp)
+  if not cellIn(self.def, cellX, cellY) then return nil end
+  if self.undo then self.undo:capture(self.def) end
+  self.def.warps = self.def.warps or {}
+  local w = { x = cellX, y = cellY,
+              destMap = destMap or self.mapId, destWarp = destWarp or 0 }
+  table.insert(self.def.warps, w)
+  self.mapChanged = true
+  return w
+end
+
+-- Moves an existing warp to a cell and marks the map changed.
+function Session:moveWarp(warp, cellX, cellY)
+  if not warp then return false end
+  if not cellIn(self.def, cellX, cellY) then return false end
+  if self.undo then self.undo:capture(self.def) end
+  warp.x, warp.y = cellX, cellY
+  self.mapChanged = true
+  return true
+end
+
+-- Re-points a warp's destination (destMap and/or destWarp, 0-based).
+function Session:setWarpDest(warp, destMap, destWarp)
+  if not warp then return false end
+  if self.undo then self.undo:capture(self.def) end
+  if destMap then warp.destMap = destMap end
+  if destWarp ~= nil then warp.destWarp = destWarp end
+  self.mapChanged = true
+  return true
+end
+
+-- Sets a warp's display label.
+function Session:setWarpLabel(warp, label)
+  if not warp then return false end
+  if self.undo then self.undo:capture(self.def) end
+  warp.label = label
+  self.mapChanged = true
+  return true
+end
+
+-- Removes a warp from the edited map.
+function Session:removeWarp(warp)
+  local list = self.def.warps or {}
+  for i = #list, 1, -1 do
+    if list[i] == warp then
+      if self.undo then self.undo:capture(self.def) end
+      table.remove(list, i)
+      self.mapChanged = true
+      return true
+    end
+  end
+  return false
+end
+
+-- Graphically wires `warp` to land on `destMapId` at `cellX, cellY` (walk-grid
+-- cells on the destination map): the destination map gets a warp there (reused
+-- when one already sits at the cell) whose reciprocal points back at the edited
+-- warp, so the pair is traversable both ways.  The destination map is marked
+-- dirty so its warps are diff-persisted when it's a loaded neighbor.
+function Session:connectWarpToCell(warp, destMapId, cellX, cellY)
+  if not warp then return false end
+  local destDef = self.data.maps[destMapId]
+  if not destDef or not cellIn(destDef, cellX, cellY) then return false end
+  if self.undo then self.undo:capture(self.def) end
+  destDef.warps = destDef.warps or {}
+  local idx
+  for i, dw in ipairs(destDef.warps) do
+    if (dw.x or -1) == cellX and (dw.y or -1) == cellY then idx = i; break end
+  end
+  local destWarp
+  if idx then
+    destWarp = destDef.warps[idx]
+  else
+    destWarp = { x = cellX, y = cellY, destMap = self.mapId }
+    table.insert(destDef.warps, destWarp)
+    idx = #destDef.warps
+  end
+  local srcIdx = self:warpIndex(warp) or 1
+  warp.destMap = destMapId
+  warp.destWarp = idx - 1
+  destWarp.destMap = self.mapId
+  destWarp.destWarp = srcIdx - 1
+  if destDef ~= self.def then
+    self.neighborDirty = self.neighborDirty or {}
+    self.neighborDirty[destMapId] = true
+  end
+  self.mapChanged = true
+  return true
+end
+
+-- --- object editing (mirrors the warp helpers) ------------------------------
+--
+-- Objects live in `def.objects` (the same table the engine reads on map
+-- enter) as { x, y, sprite|item, object_type, index, ... } records.
+
+-- The object at a walk-grid cell on the edited map, or nil.
+function Session:objectAt(cellX, cellY)
+  for _, o in ipairs(self.def.objects or {}) do
+    if (o.x or -1) == cellX and (o.y or -1) == cellY then return o end
+  end
+  return nil
+end
+
+-- A display name for an object (the item id, sprite id, or its label).
+function Session:objectName(obj)
+  if not obj then return "" end
+  if obj.label and obj.label ~= "" then return obj.label end
+  if obj.object_type == "item" then return obj.item or "item" end
+  return obj.sprite or "object"
+end
+
+-- Places a deep copy of `sample` at the cell as a new object (the "copy an
+-- object from the map" tool).  Returns the new object or nil.
+function Session:placeObjectCopy(cellX, cellY, sample)
+  if not cellIn(self.def, cellX, cellY) then return nil end
+  if not (sample and sample.object_type) then return nil end
+  if self.undo then self.undo:capture(self.def) end
+  self.def.objects = self.def.objects or {}
+  local maxIndex = 0
+  for _, o in ipairs(self.def.objects) do
+    if (o.index or 0) > maxIndex then maxIndex = o.index end
+  end
+  local copy = {}
+  for k, v in pairs(sample) do copy[k] = v end
+  copy.x, copy.y = cellX, cellY
+  copy.index = maxIndex + 1
+  table.insert(self.def.objects, copy)
+  self.mapChanged = true
+  self:refreshLiveRenderers()
+  self:refreshObjects()
+  return copy
+end
+
+-- Places a fresh simple NPC at the cell (the "New Object" template tool),
+-- using the first sprite in the engine's sprite table so the object is
+-- immediately visible; the name is editable via the Details panel.  Returns
+-- the new object or nil when no sprite exists to render with.
+function Session:placeNewObject(cellX, cellY)
+  if not cellIn(self.def, cellX, cellY) then return nil end
+  local spriteId
+  for id in pairs(self.data.sprites or {}) do spriteId = id; break end
+  if not spriteId then return nil end
+  if self.undo then self.undo:capture(self.def) end
+  self.def.objects = self.def.objects or {}
+  local maxIndex = 0
+  for _, o in ipairs(self.def.objects) do
+    if (o.index or 0) > maxIndex then maxIndex = o.index end
+  end
+  table.insert(self.def.objects, {
+    x = cellX, y = cellY,
+    sprite = spriteId,
+    index = maxIndex + 1,
+    object_type = "NPC",
+    isTrainer = false,
+    trainerClass = nil,
+    script = nil,
+    item = nil,
+    label = "New Object",
+  })
+  self.mapChanged = true
+  self:refreshLiveRenderers()
+  self:refreshObjects()
+  return self.def.objects[#self.def.objects]
+end
+
+-- Moves an existing object to a cell.
+function Session:moveObject(obj, cellX, cellY)
+  if not obj then return false end
+  if not cellIn(self.def, cellX, cellY) then return false end
+  if self.undo then self.undo:capture(self.def) end
+  obj.x, obj.y = cellX, cellY
+  self.mapChanged = true
+  self:refreshObjects()
+  return true
+end
+
+-- Sets an object's display label.
+function Session:setObjectLabel(obj, label)
+  if not obj then return false end
+  if self.undo then self.undo:capture(self.def) end
+  obj.label = label
+  self.mapChanged = true
+  return true
+end
+
+-- Removes an object from the edited map.
+function Session:removeObject(obj)
+  local list = self.def.objects or {}
+  for i = #list, 1, -1 do
+    if list[i] == obj then
+      if self.undo then self.undo:capture(self.def) end
+      table.remove(list, i)
+      self.mapChanged = true
+      self:refreshLiveRenderers()
+      self:refreshObjects()
+      return true
+    end
+  end
+  return false
+end
+
+-- Every unique block id painted on the edited map as placement-tool cells
+-- (native ids map to the map's tileset, grafted ids resolve to their source
+-- tileset + source block so the tool can re-import them).  Used as the
+-- "current map" section of the Tiles inventory tab.
+function Session:paintedBlocks()
+  local native = self.tileset and #self.tileset.blocks or 0
+  local seen, out = {}, {}
+  for _, bid in ipairs(self.def.blocks or {}) do
+    if bid and not seen[bid] then
+      seen[bid] = true
+      if bid < native then
+        out[#out + 1] = { kind = "block", id = bid, tileset = self.tileset.id }
+      else
+        local _, entry = Graft.graftFor(self.def, native, bid)
+        if entry then
+          out[#out + 1] = { kind = "block", id = entry.srcBlock,
+            srcTileset = entry.srcTileset }
+        end
+      end
+    end
+  end
+  return out
+end
+
 -- Returns the card edge side that a world cell (in the edited map's local
 -- cell frame) lies strictly beyond, or nil when it's inside the body.
 function Session:cellEdgeSide(cellX, cellY)
@@ -451,44 +699,6 @@ function Session:cellInsideNeighbor(cellX, cellY)
     end
   end
   return false
-end
-
--- Block-paint gate for cells beyond the edited map's body: applies the
--- expand-vs-create rule so a tile off the edge either widens the current map
--- (to match the map on the opposite side) or spawns a fresh, correctly-placed
--- map with 2-way connections to every touching map.
---
--- Returns:
---   "grown"    the current map was enlarged to contain the cell (paint done)
---   "created"  a new map was created at the edge and the block painted on it
---   nil        the cell is inside the map -- normal paintBlock path only
-function Session:handleEdgePaint(cellX, cellY)
-  local side = self:cellEdgeSide(cellX, cellY)
-  if not side then return nil end
-  local NewMap = require("mods.mapamap.func.new_map")
-  local action = NewMap.expandOrCreate(self, side)
-  self.cursorBx = cellX
-  self.cursorBy = cellY
-  if action == "expand" then
-    self:growToOppositeSide(side)
-    self:paintBlock()
-    return "grown"
-  end
-  local newId = NewMap.createSidedMap(self, side, 0)
-  if not newId then
-    self:paintBlock()
-    return "grown"
-  end
-  -- Track the new map whole (like the N-key path) so it survives a reload:
-  -- as a neighbor its patch diff would only carry the connection back-edge.
-  self._newMaps = self._newMaps or {}
-  self._newMaps[newId] = Common.deepCopy(self.data.maps[newId])
-  -- The new map is now a laid-out neighbor; rebuild the overworld's drawn
-  -- neighbor set so the fresh body appears immediately (not only after a
-  -- re-enter), then paint (paintBlock handles the neighbor body).
-  self:rebuildWorldNeighbors()
-  self:paintBlock()
-  return "created"
 end
 
 return Session

@@ -227,35 +227,72 @@ function MapOps.paintBlock(self)
     rebuildFor(self, mapId)
   end
 
--- Stamps a captured blueprint grid onto the primary map def at the current
--- cursor block (2x2-aligned), skipping tiles that fall outside the map body.
+-- Stamps a captured blueprint grid onto the visible laid-out maps at the
+-- current cursor block (2x2-aligned), skipping cells over open void.
 -- Mirrors paintBlock's delta-capture so a blueprint stamp is pushed as an undo
--- step and can be undone/redone with Ctrl+Z / Ctrl+Y like any block paint.
+-- step per touched map and can be undone/redone with Ctrl+Z / Ctrl+Y like any
+-- block paint.
 function MapOps.paintBlueprint(self, bp)
-  local def = self.def
-  local bx0 = math.floor(self.cursorBx * CELL_PX / BLOCK_PX)
-  local by0 = math.floor(self.cursorBy * CELL_PX / BLOCK_PX)
+  local Neighbors = require("mods.mapamap.func.neighbors")
+  local Graft = require("mods.mapamap.func.graft")
+  local bx0 = math.floor(self.cursorBx / 2)
+  local by0 = math.floor(self.cursorBy / 2)
   local changed = false
-  local changedIndices, oldValues = {}, {}
+  local groups = {}
+  local graftedTilesets = {}
   for row = 0, bp.h - 1 do
     for col = 0, bp.w - 1 do
-      local bx = bx0 + col
-      local by = by0 + row
-      if bx >= 0 and by >= 0 and bx < def.width and by < def.height then
-        local idx = by * def.width + bx + 1
-        changedIndices[#changedIndices + 1] = idx
-        oldValues[#oldValues + 1] = def.blocks[idx]
-        def.blocks[idx] = bp.tiles[row * bp.w + col + 1]
-        changed = true
+      local cell = bp.tiles[row * bp.w + col + 1]
+      if cell ~= nil and cell ~= false then
+        local tile = type(cell) == "table" and cell.id or cell
+        local srcTileset = type(cell) == "table" and cell.tileset or nil
+        local wx = bx0 + col
+        local wy = by0 + row
+        local mapId, def, ox, oy =
+          Neighbors.mapAt(self.def, self.neighbors, wx * 2, wy * 2)
+        local bx = def and math.floor((wx * BLOCK_PX - (ox or 0)) / BLOCK_PX)
+        local by = def and math.floor((wy * BLOCK_PX - (oy or 0)) / BLOCK_PX)
+        if def and bx >= 0 and by >= 0 and bx < def.width and by < def.height then
+          if srcTileset and srcTileset ~= def.tileset then
+            local grafted = Graft.importBlock(self.data, def.tileset, def, srcTileset, tile)
+            if grafted then
+              tile = grafted
+              graftedTilesets[def.tileset] = true
+            else
+              tile = nil
+            end
+          end
+          if tile ~= nil then
+            local idx = by * def.width + bx + 1
+            local gkey = mapId or "__root"
+            local g = groups[gkey]
+            if not g then
+              g = { mapId = mapId, def = def, changedIndices = {}, oldValues = {} }
+              groups[gkey] = g
+            end
+            g.changedIndices[#g.changedIndices + 1] = idx
+            g.oldValues[#g.oldValues + 1] = def.blocks[idx]
+            def.blocks[idx] = tile
+            changed = true
+          end
+        end
       end
     end
   end
   if changed then
-    if self.undo then
-      self.undo:capture(def, nil, nil, nil, changedIndices, oldValues)
+    for tilesetId in pairs(graftedTilesets) do
+      Graft.invalidateTileset(self.data, tilesetId)
+      Graft.materialize(self.data, tilesetId)
+      self._thumbBundles = {}
+    end
+    for _, g in pairs(groups) do
+      if self.undo then
+        self.undo:capture(g.def, nil, nil, g.mapId, g.changedIndices, g.oldValues)
+      end
+      if g.mapId ~= nil then self.neighborDirty[g.mapId] = true end
+      rebuildFor(self, g.mapId)
     end
     self.mapChanged = true
-    self.map.renderer:rebuild()
   end
   return changed
 end

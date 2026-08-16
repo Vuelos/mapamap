@@ -36,60 +36,31 @@ function NewMap.uniqueMapName(data, base)
   return name
 end
 
--- The block-dimension a side runs parallel to: north/south span the map's
--- width (blocks), west/east span its height.  Used by the expand-vs-create
--- rule (match the neighbour's dimension when painting toward an edge).
-function NewMap.parallelDim(side)
-  if side == "north" or side == "south" then return "width" end
-  return "height"
-end
-
--- Reciprocal connection name for a side.
-function NewMap.recipSide(side)
-  return RECIP[side]
-end
-
--- The map directly opposite `side` of the edited map: for a southward paint
--- this is the map whose body touches the edited map's north edge (the "one
--- above"), so we know how wide the column already is.  Returns the def or
--- nil when no laid-out map touches that opposite edge.
-function NewMap.oppositeDef(self, side)
-  local back = RECIP[side]
-  local def = self.def
-  local x0 = 0
-  local y0 = 0
-  local x1 = def.width * BLOCK_PX
-  local y1 = def.height * BLOCK_PX
-  for _, nb in ipairs(self.neighbors or {}) do
-    local nx0, ny0 = nb.ox, nb.oy
-    local nx1 = nx0 + nb.def.width * BLOCK_PX
-    local ny1 = ny0 + nb.def.height * BLOCK_PX
-    local touches
-    if back == "north" then
-      touches = ny1 == y0 and nx0 < x1 and x0 < nx1
-    elseif back == "south" then
-      touches = y1 == ny0 and nx0 < x1 and x0 < nx1
-    elseif back == "west" then
-      touches = nx1 == x0 and ny0 < y1 and y0 < ny1
-    else
-      touches = x1 == nx0 and ny0 < y1 and y0 < ny1
-    end
-    if touches then return nb.def end
+-- A fresh, empty map definition (block grid filled with the current map's
+-- border block) with a unique id/name next to this map's, styled after the
+-- current map (tileset, palette, zeroed encounters).
+function NewMap.buildDef(self, id, w, h)
+  local border = self.def.borderBlock or 0
+  local blocks = {}
+  for i = 1, w * h do blocks[i] = border end
+  local name = NewMap.uniqueMapName(self.data, "NEW_MAP")
+  local maxIndex = 0
+  for _, def in pairs(self.data.maps or {}) do
+    if def.index and def.index > maxIndex then maxIndex = def.index end
   end
-  return nil
-end
-
--- Decides whether painting toward `side` should expand the current map or
--- create a fresh one.  The rule (per spec): expand when the current map's
--- dimension parallel to the side is LOWER than the map directly above or
--- below it (for north/south) or west/east (for east/west); otherwise create.
--- Returns "expand" or "create".
-function NewMap.expandOrCreate(self, side)
-  local dim = NewMap.parallelDim(side)
-  local opp = NewMap.oppositeDef(self, side)
-  if not opp then return "create" end
-  if (self.def[dim] or 0) < (opp[dim] or 0) then return "expand" end
-  return "create"
+  return {
+    id = id, name = name, width = w, height = h,
+    blocks = blocks, borderBlock = border,
+    warps = {}, objects = {}, signs = {},
+    connections = {},
+    tileset = self.def.tileset, palette = self.def.palette,
+    index = maxIndex + 1, label = id,
+    encounters = {
+      grass = { rate = 0, slots = {} },
+      water = { rate = 0, slots = {} },
+      indoor = { rate = 0, slots = {} },
+    },
+  }
 end
 
 -- Creates a new map connected on `side` at `offset` blocks, and wires a
@@ -98,7 +69,6 @@ end
 function NewMap.createSidedMap(self, side, offset)
   local data = self.data
   if not data or not data.maps then return nil end
-  local border = self.def.borderBlock or 0
   local width = self.def.width
   local height = self.def.height
 
@@ -116,27 +86,7 @@ function NewMap.createSidedMap(self, side, offset)
     return nil
   end
 
-  local blocks = {}
-  for i = 1, width * height do blocks[i] = border end
-
-  local name = NewMap.uniqueMapName(data, "NEW_MAP")
-  local maxIndex = 0
-  for id, def in pairs(data.maps or {}) do
-    if def.index and def.index > maxIndex then maxIndex = def.index end
-  end
-
-  local newDef = {
-    id = newId, name = name, width = width, height = height,
-    blocks = blocks, borderBlock = border,
-    warps = {}, objects = {}, signs = {},
-    tileset = self.def.tileset, palette = self.def.palette,
-    index = maxIndex + 1, label = newId,
-    encounters = {
-      grass = { rate = 0, slots = {} },
-      water = { rate = 0, slots = {} },
-      indoor = { rate = 0, slots = {} },
-    },
-  }
+  local newDef = NewMap.buildDef(self, newId, width, height)
   data.maps[newId] = newDef
 
   -- Connection from the current map to the new map, plus the reciprocal.
