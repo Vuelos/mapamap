@@ -8,20 +8,43 @@
 --   * wheel     -> scroll the open picker (or cycle hotbar when closed)
 --   * digit keys -> select a hotbar slot directly
 --   * dragging  -> from the picker onto a hotbar slot assigns that item
+--   * B         -> open the inventory's Blueprints tab (preview panel)
+--   * R         -> toggle rectangle-select blueprint capture (LMB drag)
+--
+-- This module only routes input.  The UI controller state it reads and mutates
+-- lives here on the Input table; the actual work is delegated to focused
+-- modules so the dispatchers stay thin:
+--   * func/state.lua         -- hotbar/inventory lifecycle + persistence
+--   * func/blueprints.lua    -- rectangle-select capture and stamping
+--   * func/paint.lua         -- paint / erase / pick / warp dest-pick
+--   * components/hotbar.lua  -- selection model (tag/selected/apply/loadItem)
+--   * components/inventory.lua -- collection model (add/list)
+--   * components/details.lua -- modal Details open/close/keyboard
+--   * components/picker.lua  -- catalog and item lists
 --
 -- All input is guarded by the active flag so the vanilla game is untouched
 -- while the overlay is closed.  Coordinates arrive in LOVE screen units.
 
-local Common = require("mods.mapamap.func.common")
 local Coords = require("mods.mapamap.func.coords")
-local Neighbors = require("mods.mapamap.func.neighbors")
-local NewMap = require("mods.mapamap.func.new_map")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Picker = require("mods.mapamap.components.picker")
-local Blueprints = require("mods.mapamap.components.blueprints")
 local Inventory = require("mods.mapamap.components.inventory")
+local Details = require("mods.mapamap.components.details")
+local Blueprints = require("mods.mapamap.func.blueprints")
+local Paint = require("mods.mapamap.func.paint")
+local State = require("mods.mapamap.func.state")
 
 local Input = {}
+
+local function normalizeMouseButton(button)
+  if button == nil then return nil end
+  if type(button) == "number" then return button end
+  local v = tostring(button):lower()
+  if v == "left" or v == "lmb" then return 1 end
+  if v == "right" or v == "rmb" then return 2 end
+  if v == "middle" or v == "mmb" then return 3 end
+  return button
+end
 
 -- Hotbar: fixed-size array of item slots.  Each slot is
 --   { kind = "block", id = <number> }  or  { kind = "sprite", id = <string> }
@@ -31,29 +54,41 @@ Input.selected = 1
 -- The inventory panel: a persistent collection of placeables (blocks,
 -- sprites/items, warps, blueprints) stored flat, shown through one tab.
 Input.inventory = { items = {}, tab = 1, scroll = 1 }
+Input.showInventory = true
+Input.mouseButtons = { [1] = false, [2] = false, [3] = false }
 -- The tileset picker panel.
 Input.showPicker = false
 Input.pickerScroll = 1
 Input.pickerScrollBase = 0
-Input.pickerTilesetScroll = 1  -- page into the left tileset-name list
+Input.pickerTilesetScroll = 1  -- page into the open tileset dropdown list
+Input.pickerDropOpen = false   -- the tileset dropdown is expanded
 -- Which tileset the picker is browsing (nil = the session's map tileset).
 Input.pickerTileset = nil
 -- Dragging a picker item onto a hotbar slot.
 Input.dragItem = nil
 
--- Blueprint support: a book of saved block grids, plus a rectangle-select
--- capture mode.  Each entry is { id, w, h, tiles } where tiles is row-major
--- block ids.  Captures are taken straight from the map under a drag rectangle.
-Input.blueprints = {}
+-- Blueprint support: a rectangle-select capture mode.  Captured blueprints are
+-- stored whole as items in the inventory's Blueprints tab (the inventory is
+-- the single blueprint container; there is no separate book).
 Input.blueprintMode = false  -- rectangle-select capture is armed
-Input.selectStart = nil      -- {bx, by} block coords where the selection began
-Input.selectEnd = nil        -- {bx, by} current selection anchor (single cell)
-Input.showBlueprints = false -- the blueprint book panel is open
-Input.blueprintScroll = 1
+Input.selectStart = nil      -- {bx, by} world-block coords where selection began
+Input.selectEnd = nil        -- {bx, by} current world-block selection anchor
+Input._bpMoved = false       -- a move happened after the press (it was a drag)
 
-local state = {
+-- Warp editing: a selected warp (from the Warps tab or a world right-click)
+-- with a graphical destination-pick mode (C arms it; the next world click sets
+-- the target) and a modal Details panel for field editing.
+Input.selectedWarp = nil      -- a live def.warps entry, or nil
+Input.selectedObject = nil    -- a live def.objects entry, or nil
+Input.warpDestPick = false    -- arm "pick destination" for the selected warp
+Input.details = nil           -- { target, fields, index, editing } or nil
+
+-- Brush drag state (arm flags, drag anchors, dedupe cells).  Owned here, but
+-- read and mutated by func/paint.lua through the `brush` argument.
+local brush = {
   painting = false,
   erasing = false,
+  draggingWarp = false,
   paintingMap = nil,   -- mapId painted on this drag (blocks only)
   lastBlockX = nil,    -- last painted block coord (re-paint dedupe)
   lastBlockY = nil,
@@ -61,335 +96,159 @@ local state = {
   lastCellY = nil,
 }
 
--- Re-seeds the hotbar from a saved mod-save layout (or the default pick).
-function Input.configure(initial)
-  Input.hotbar = {}
-  for i = 1, Hotbar.SLOTS do
-    Input.hotbar[i] = initial and initial[i] or nil
+-- The mod's press/release flags are event-driven; a release can be lost to a
+-- window focus flip, input recovery or a cancel, and then the brush would stay
+-- armed forever.  Every move reconciles the flags against the physical mouse,
+-- so letting the button up always ends the drag even if its event never
+-- arrives.  No-op when love.mouse.isDown is unavailable (headless harnesses).
+local function reconcileMouseHeld()
+  local isDown = love.mouse.isDown
+  if not isDown then return end
+  if Input.mouseButtons[1] and not isDown(1) then
+    Input.mouseButtons[1] = false
+    brush.painting = false
   end
-  Input.selected = 1
-end
-
--- Serialized hotbar for persistence.
-function Input.serialize()
-  return Input.hotbar
-end
-
--- Adds an item to the inventory, switching to its tab and scrolling so the
--- newest entry is visible.
-function Input.addInventory(item)
-  if not item then return end
-  table.insert(Input.inventory.items, item)
-  local tabIdx = Inventory.tabFor(item)
-  Input.inventory.tab = tabIdx
-  local vw, vh = love.graphics.getDimensions()
-  local list = Inventory.listFor(Input.inventory.items, tabIdx)
-  local per = Inventory.perPage(vw, vh)
-  Input.inventory.scroll = math.max(1, math.ceil(#list / per))
-end
-
--- The filtered inventory list for the active tab (input-facing alias so call
--- sites don't reach into the component for the model).
-function Input.inventoryList()
-  return Inventory.listFor(Input.inventory.items, Input.inventory.tab)
-end
-
-function Input.reset()
-  state.painting = false
-  state.erasing = false
-  state.paintingMap = nil
-  state.lastBlockX = nil
-  state.lastBlockY = nil
-  state.lastCellX = nil
-  state.lastCellY = nil
-  Input.dragItem = nil
-  Input.pickerTilesetScroll = 1
-  Input.blueprintMode = false
-  Input.selectStart = nil
-  Input.selectEnd = nil
-  Input.showBlueprints = false
-  Input.blueprintScroll = 1
-  Input.inventory.tab = 1
-  Input.inventory.scroll = 1
-  Input._needsGraftRebuild = false
-end
-
--- Re-points the picker and hotbar when the session switches to a new map
--- (walking across a border or adopting a created map).  The picker re-defaults
--- to the incoming map's tileset and block brushes are re-seeded onto that
--- tileset's palette so the same slot index never paints a stale tile id.
-function Input.onMapEntry(session)
-  -- Re-default the picker to the current map's tileset (featured first).
-  Input.pickerTileset = nil
-  Input.pickerScroll = 1
-  Input.pickerTilesetScroll = 1
-  -- Re-seed block slots onto the incoming tileset's palette.
-  local palette = session.paletteList or {}
-  for i = 1, Hotbar.SLOTS do
-    local item = Input.hotbar[i]
-    if item and item.kind == "block" and #palette > 0 then
-      Input.hotbar[i] = { kind = "block", id = palette[(i - 1) % #palette + 1] }
-    end
+  if Input.mouseButtons[2] and not isDown(2) then
+    Input.mouseButtons[2] = false
+    brush.erasing = false
+    brush.draggingWarp = false
   end
-  if Input.selectedItem() then Input.applySelection(session) end
 end
 
--- The currently selected hotbar item.
-function Input.selectedItem()
-  return Input.hotbar[Input.selected]
-end
-
--- Sets the session's paint target from the selected hotbar slot.  Returns
--- true when a valid item is selected.
-function Input.applySelection(session)
-  local item = Input.selectedItem()
-  if not item then return false end
-  if item.kind == "sprite" then
-    session.selectedSprite = item.id
-  elseif item.kind == "item" or item.kind == "blueprint" then
-    session.selectedSprite = nil
-    session.selectedBlock = nil
-  else
-    local blockId = item.id
-    local srcTileset = item.srcTileset or item.tileset
-    if srcTileset and srcTileset ~= session.tileset.id then
-      local gid = session:importBlock(srcTileset, blockId)
-      if gid == nil then return false end
-      blockId = gid
-      session._needsGraftRebuild = true
-    end
-    session.selectedBlock = blockId
-    session.selectedSprite = nil
-  end
+-- True when a mouse button is pressed in the mod's event state and still
+-- physically held.  Callers (cursor highlight, brush routing) use this so a
+-- stale press flag can never leave the brush visibly armed after release.
+function Input.mouseDown(button)
+  if not Input.mouseButtons[button] then return false end
+  local isDown = love.mouse.isDown
+  if isDown then return isDown(button) end
   return true
 end
--- Ordered catalog list for the picker's left column: the virtual "Items &
--- NPCs" entry first, then the real tilesets (current map's first).
-function Input.tilesetNames(session)
-  return Picker.catalog(session)
+
+-- The game reports a pointer as cancelled (focus loss, input recovery, window
+-- hidden) instead of released: retire every held button and in-flight drag so
+-- nothing stays armed waiting for a release that will never come.
+function Input.cancelled()
+  Input.mouseButtons = { [1] = false, [2] = false, [3] = false }
+  brush.painting = false
+  brush.erasing = false
+  brush.draggingWarp = false
+  Input.dragItem = nil
 end
 
--- Full picker list for the currently-browsed catalog entry as { kind, id }
--- items.  `selection` lets callers browse a specific tileset / the virtual
--- catalog; nil uses the current map's tileset.
-function Input.tilesetList(session, selection)
-  return Picker.itemList(session, selection)
-end
+-- ---------------------------------------------------------------------------
+-- Model facades: thin delegation to the focused modules.  These keep the
+-- controller's public API (used by main.lua, the overlay, and the tests)
+-- stable while the implementations live next to their data models.
 
--- --- blueprint capture & paint ----------------------------------------------
-
--- Block coords (bx, by) on the session's primary map def under a screen point,
--- or nil when outside that map's body.
-function Input.blockCellAt(session, mx, my)
-  local t = Coords.transform(session.game)
-  if not t then return nil end
-  local tx, ty = Coords.toWorldCell(t, mx, my)
-  local def = session.def
-  local bx = math.floor((tx * 16) / Common.BLOCK_PX)
-  local by = math.floor((ty * 16) / Common.BLOCK_PX)
-  if bx < 0 or by < 0 or bx >= def.width or by >= def.height then return nil end
-  return bx, by
-end
-
--- Captures the block grid inside the current selection rectangle into the
--- blueprint book.  Returns the new blueprint id, or nil.
-function Input.captureBlueprint(session)
-  local a, b = Input.selectStart, Input.selectEnd
-  if not a or not b then return nil end
-  local x0, x1 = math.min(a.bx, b.bx), math.max(a.bx, b.bx)
-  local y0, y1 = math.min(a.by, b.by), math.max(a.by, b.by)
-  local w = x1 - x0 + 1
-  local h = y1 - y0 + 1
-  if w <= 0 or h <= 0 or w * h > 4096 then return nil end
-  local def = session.def
-  local tiles = {}
-  for by = y0, y1 do
-    for bx = x0, x1 do
-      tiles[#tiles + 1] = def.blocks[by * def.width + bx + 1]
-    end
-  end
-  local id = "blueprint_" .. os.time()
-  table.insert(Input.blueprints, { id = id, w = w, h = h, tiles = tiles })
-  -- Blueprints surface in the inventory's Blueprints tab (the old separate
-  -- blueprint bar is folded away).
-  Input.addInventory({ kind = "blueprint", id = id })
-  Input.selectStart, Input.selectEnd = nil, nil
-  -- The capture is done: leave rectangle-select and open the book so the new
-  -- blueprint is immediately visible after stamping it in.
-  Input.blueprintMode = false
-  Input.showBlueprints = true
-  Input.showPicker = false
-  local vw, vh = love.graphics.getDimensions()
-  Input.blueprintScroll = math.ceil(#Input.blueprints / Blueprints.perPage(vw, vh))
-  return id
-end
-
--- Paints a blueprint at the given screen point's cursor block on the primary
--- map.  Returns true when stamps were written.
+function Input.configure(initial) State.configure(Input, initial) end
+function Input.serialize() return State.serialize(Input) end
+function Input.addInventory(item) Inventory.add(Input, item) end
+function Input.inventoryList(session) return Inventory.list(Input) end
+function Input.openDetails(session, target) Details.open(Input, session, target) end
+function Input.closeDetails() Details.close(Input) end
+function Input.keyDetails(session, key) return Details.key(Input, session, key) end
+function Input.reset() State.reset(Input, brush) end
+function Input.onMapEntry(session) State.onMapEntry(Input, session) end
+function Input.tagBlock(session, item) return Hotbar.tag(session, item) end
+function Input.selectedItem() return Hotbar.selected(Input) end
+function Input.applySelection(session) return Hotbar.apply(Input, session) end
+function Input.blockCellAt(session, mx, my) return Blueprints.cellAt(session, mx, my) end
+function Input.captureBlueprint(session) return Blueprints.capture(Input, session) end
 function Input.paintBlueprint(session, bid, mx, my)
-  local bp = nil
-  for _, e in ipairs(Input.blueprints) do if e.id == bid then bp = e; break end end
-  if not bp then return false end
-  local t = Coords.transform(session.game)
-  if not t then return false end
-  local tx, ty = Coords.toWorldCell(t, mx, my)
-  session.cursorBx = tx - (tx % 2)
-  session.cursorBy = ty - (ty % 2)
-  -- Defer the stamp + renderer rebuild to MapOps.paintBlueprint, which also
-  -- pushes an undo step so Ctrl+Z / Ctrl+Y move through blueprint stamps.
-  return session:paintBlueprint(bp)
+  return Blueprints.paint(Input, session, bid, mx, my)
 end
+function Input.pickUnder(session, game, mx, my) return Paint.pickUnder(session, game, mx, my) end
+function Input.paintAt(session, mx, my) return Paint.paintAt(Input, brush, session, mx, my) end
+function Input.eraseAt(session, mx, my) return Paint.eraseAt(Input, brush, session, mx, my) end
+function Input.saveHotbar(mod) State.saveHotbar(Input, mod) end
+function Input.saveInventory(mod) State.saveInventory(Input, mod) end
+function Input.loadInventory(mod) State.loadInventory(Input, mod) end
 
--- The block / sprite id stored at a given screen point, for the cursor pick.
--- Returns nil when not over the world.
-function Input.pickUnder(session, game, mx, my, vw, vh)
-  local t = Coords.transform(game)
-  if not t then return nil end
-  local tx, ty = Coords.toWorldCell(t, mx, my)
-  local mapId, def, ox, oy = require("mods.mapamap.func.neighbors")
-    .mapAt(session.def, session.neighbors, tx, ty)
-  if not def then return nil end
-  local bx = math.floor((tx * 16 - (ox or 0)) / Common.BLOCK_PX)
-  local by = math.floor((ty * 16 - (oy or 0)) / Common.BLOCK_PX)
-  if bx < 0 or by < 0 or bx >= def.width or by >= def.height then return nil end
-  return def.blocks[by * def.width + bx + 1]
-end
-
--- Paints one block (or sprite) at the cursor if it has moved to a new cell.
--- Returns true when something changed.
-function Input.paintAt(session, mx, my)
-  local item = Input.selectedItem()
-  if not item then return false end
-  local t = Coords.transform(session.game)
-  if not t then return false end
-  local tx, ty = Coords.toWorldCell(t, mx, my)
-  if tx == state.lastCellX and ty == state.lastCellY then return false end
-  state.lastCellX, state.lastCellY = tx, ty
-
-  -- Sprites place NPC objects, one per block cell.
-  if item.kind == "sprite" then
-    session.cursorBx = tx
-    session.cursorBy = ty
-    return session:placeSprite(item.id)
-  end
-
-  -- Items place map-item objects, one per block cell.
-  if item.kind == "item" then
-    session.cursorBx = tx
-    session.cursorBy = ty
-    return session:placeItem(item.id)
-  end
-
-  -- Blueprints stamp a block grid at the cursor block.
-  if item.kind == "blueprint" then
-    return Input.paintBlueprint(session, item.id, mx, my)
-  end
-
-  -- Blocks paint with the shared map_ops brush.  Cursor is snapped to whole
-  -- blocks (2-cell) in MAP mode semantics.
-  session.cursorBx = tx - (tx % 2)
-  session.cursorBy = ty - (ty % 2)
-  session.selectedBlock = item.id
-  local srcTileset = item.srcTileset or item.tileset
-  if srcTileset then
-    local gid = session:importBlock(srcTileset, item.id)
-    if gid == nil then return false end
-    session.selectedBlock = gid
-    if session._needsGraftRebuild then
-      session:reloadGraftedRenderers()
-      session._needsGraftRebuild = false
-    end
-  end
-  -- When the cursor is outside every laid-out map body (strictly beyond the
-  -- map edge into open space), route through the edge expand-vs-create rule;
-  -- otherwise paint normally (paintBlock handles in-body and neighbor cells).
-  local side = session:cellEdgeSide(session.cursorBx, session.cursorBy)
-  if side and not session:cellInsideNeighbor(session.cursorBx, session.cursorBy) then
-    session:handleEdgePaint(session.cursorBx, session.cursorBy)
-  else
-    session:snapCursorToBlock()
-    session:paintBlock()
-  end
-  session:refreshLiveRenderers()
-  return session.mapChanged
-end
-
--- Erases one cell back to the snapshot (blocks) or removes an object (sprite
--- slot).  Returns true when something changed.
-function Input.eraseAt(session, mx, my)
-  local t = Coords.transform(session.game)
-  if not t then return false end
-  local tx, ty = Coords.toWorldCell(t, mx, my)
-  if tx == state.lastCellX and ty == state.lastCellY then return false end
-  state.lastCellX, state.lastCellY = tx, ty
-  local item = Input.selectedItem()
-  if item and item.kind == "sprite" then
-    session.cursorBx = tx
-    session.cursorBy = ty
-    return session:eraseObjectsAtCell()
-  end
-  session.cursorBx = tx - (tx % 2)
-  session.cursorBy = ty - (ty % 2)
-  session:snapCursorToBlock()
-  session:revertBlock()
-  session:refreshLiveRenderers()
-  return session.mapChanged
-end
+-- ---------------------------------------------------------------------------
+-- Dispatch
 
 -- Handles love.mousepressed while active.  Returns true when consumed.
 function Input.mousepressed(session, game, mx, my, button)
   if not session then return false end
+  button = normalizeMouseButton(button)
+  if button then Input.mouseButtons[button] = true end
   local vw, vh = love.graphics.getDimensions()
-  -- Blueprint capture is armed: LMB starts (or updates) a drag rectangle.
+  -- A modal Details panel is open: clicks outside it close it; anything else
+  -- (including clicks on the panel) is consumed so the world never paints
+  -- underneath.
+  if Input.details then
+    if Details.over(vw, vh, mx, my) then
+      -- A click on a field row selects it; only the DELETE row (an action
+      -- button) runs on click. Text editing starts with Enter, so a mouse
+      -- click never leaves an edit cursor stuck after release.
+      if button == 1 then
+        local idx = Details.hit(vw, vh, mx, my)
+        local fields = Input.details.fields
+        if idx and fields and idx <= #fields then
+          Input.details.index = idx
+          if fields[idx].type == "action" then
+            Details.activate(Input, session, Input.details)
+          end
+        end
+      end
+      return true
+    end
+    Input.closeDetails()
+    return true
+  end
+  -- Blueprint capture is armed.  The first LMB click anchors the rectangle's
+  -- start corner; the second LMB click finalizes the end corner, captures the
+  -- rectangle into the inventory, and closes the R tool.  A press-drag-release
+  -- gesture also works: releasing after a drag captures immediately.
   if Input.blueprintMode and button == 1 then
     local bx, by = Input.blockCellAt(session, mx, my)
     if bx then
-      Input.selectStart = { bx = bx, by = by }
-      Input.selectEnd = { bx = bx, by = by }
-      return true
+      if not Input.selectStart then
+        Input.selectStart = { bx = bx, by = by }
+        Input.selectEnd = nil
+        Input._bpMoved = false
+      else
+        Input.selectEnd = { bx = bx, by = by }
+        Input.captureBlueprint(session)
+      end
     end
     return true
   end
-  -- Blueprint book panel: click an entry to load it into the selected slot.
-  if Input.showBlueprints and button == 1 then
-    local idx = Blueprints.itemAt(vw, vh, mx, my, Input.blueprintScroll)
-    if idx and Input.blueprints[idx] then
-      local bpD = { kind = "blueprint", id = Input.blueprints[idx].id }
-      Input.dragItem = bpD
-      -- A plain click replaces the current selected hotbar slot; if the press
-      -- was also on a hotbar slot, that slot wins instead.
-      if Hotbar.at(vw, vh, mx, my) then
-        local slot = Hotbar.at(vw, vh, mx, my)
-        Input.hotbar[slot] = bpD
-        Input.selected = slot
-      else
-        Input.hotbar[Input.selected] = bpD
-      end
-      Input.applySelection(session)
-      return true
-    end
-  end
   -- Picker drags: start dragging a picker item (LMB over the panel).
   if Input.showPicker and button == 1 then
-    -- Left tileset-name list first: click a name to browse that catalog entry.
-    local tsIdx = Picker.nameAt(vw, vh, mx, my, Input.pickerTilesetScroll)
-    if tsIdx then
-      local names = Input.tilesetNames(session)
-      if names[tsIdx] then
-        Input.pickerTileset = names[tsIdx]
-        Input.pickerScroll = 1
+    -- Tileset dropdown: clicking the button expands/collapses it; picking an
+    -- entry from the open list switches the browsed catalog.
+    if Picker.dropAt(vw, vh, mx, my) then
+      Input.pickerDropOpen = not Input.pickerDropOpen
+      if Input.pickerDropOpen then Input.pickerTilesetScroll = 1 end
+      return true
+    end
+    if Input.pickerDropOpen then
+      local tsIdx = Picker.dropEntryAt(session, vw, vh, mx, my,
+        Input.pickerTilesetScroll)
+      if tsIdx then
+        local names = Picker.catalog(session)
+        if names[tsIdx] then
+          Input.pickerTileset = names[tsIdx]
+          Input.pickerScroll = 1
+        end
+        Input.pickerDropOpen = false
+      else
+        -- Click in the list band but off an entry: close without selecting.
+        Input.pickerDropOpen = false
       end
       return true
     end
     local idx = Picker.itemAt(vw, vh, mx, my, Input.pickerScroll)
     if idx then
-      local list = Input.tilesetList(session, Input.pickerTileset)
+      local list = Picker.itemList(session, Input.pickerTileset)
       Input.dragItem = list[idx]
       if not Input.dragItem then return true end
       -- A plain click here replaces the current selected hotbar slot; if the
       -- press was also on a hotbar slot, that slot wins instead.
-      if Hotbar.at(vw, vh, mx, my) then
-        local slot = Hotbar.at(vw, vh, mx, my)
+      local slot = Hotbar.at(vw, vh, mx, my)
+      if slot then
         Input.hotbar[slot] = Input.dragItem
         Input.selected = slot
       else
@@ -399,26 +258,38 @@ function Input.mousepressed(session, game, mx, my, button)
       return true
     end
   end
-  -- Inventory panel: swap tabs or load a cell into the selected hotbar slot.
-  if button == 1 and Inventory.over(vw, vh, mx, my) then
-    local tabIdx = Inventory.tabAt(vw, vh, mx, my)
-    if tabIdx then
-      Input.inventory.tab = tabIdx
-      Input.inventory.scroll = 1
-      return true
-    end
-    local idx = Inventory.itemAt(vw, vh, mx, my, Input.inventory.scroll)
-    if idx then
-      local item = Input.inventoryList()[idx]
-      if item then
-        Input.hotbar[Input.selected] = item
-        Input.applySelection(session)
+  -- Inventory panel: swap tabs, load a cell into the selected hotbar slot
+  -- (Warps cells load a warp placement tool), or right-click for Details.
+  if Input.showInventory and Inventory.over(vw, vh, mx, my) then
+    if button == 2 then
+      local idx = Inventory.itemAt(vw, vh, mx, my, Input.inventory.scroll)
+      if idx then
+        local item = Inventory.list(Input)[idx]
+        if item then
+          Details.openForItem(Input, session, item)
+        end
       end
       return true
     end
-    -- Click inside the panel but outside any tab/cell: consume it so the
-    -- world underneath is never painted.
-    return true
+    if button == 1 then
+      local tabIdx = Inventory.tabAt(vw, vh, mx, my)
+      if tabIdx then
+        Input.inventory.tab = tabIdx
+        Input.inventory.scroll = 1
+        return true
+      end
+      local idx = Inventory.itemAt(vw, vh, mx, my, Input.inventory.scroll)
+      if idx then
+        local item = Inventory.list(Input)[idx]
+        if item then
+          Hotbar.loadItem(Input, session, item)
+        end
+        return true
+      end
+      -- Click inside the panel but outside any tab/cell: consume it so the
+      -- world underneath is never painted.
+      return true
+    end
   end
   -- Hotbar selection.
   local slot = Hotbar.at(vw, vh, mx, my)
@@ -429,9 +300,16 @@ function Input.mousepressed(session, game, mx, my, button)
   end
   -- World paint / erase.
   if button == 1 then
-    state.painting = true
-    state.erasing = false
-    state.lastCellX, state.lastCellY = nil, nil
+    brush.painting = true
+    brush.erasing = false
+    brush.lastCellX, brush.lastCellY = nil, nil
+    -- Graphical destination-pick: the next world click wires the selected
+    -- warp to land on whatever laid-out map is under the cursor.
+    if Input.warpDestPick and session.selectedWarp then
+      brush.painting = false
+      Paint.destPick(Input, session, mx, my)
+      return true
+    end
     Input.applySelection(session)
     -- Paint the cell under the cursor immediately (a press without a drag
     -- must still place one block).
@@ -443,10 +321,34 @@ function Input.mousepressed(session, game, mx, my, button)
     end
     return true
   elseif button == 2 then
-    state.erasing = true
-    state.painting = false
-    state.lastCellX, state.lastCellY = nil, nil
     local t = Coords.transform(session.game)
+    local obj, warp
+    if t then
+      local tx, ty = Coords.toWorldCell(t, mx, my)
+      session.cursorBx, session.cursorBy = tx, ty
+      -- Hovered object/warp: select it and open its Details panel.
+      obj = session:objectAt(tx, ty)
+      if not obj then warp = session:warpAt(tx, ty) end
+    end
+    if obj then
+      session.selectedObject = obj
+      Input.openDetails(session, { object = obj })
+      return true
+    end
+    if warp then
+      session.selectedWarp = warp
+      Input.openDetails(session, { warp = warp })
+      return true
+    end
+    -- A warp tool with a selected warp drags it to a new cell on release.
+    local item = Input.selectedItem()
+    if item and item.kind == "warp" and session.selectedWarp then
+      brush.draggingWarp = true
+      return true
+    end
+    brush.erasing = true
+    brush.painting = false
+    brush.lastCellX, brush.lastCellY = nil, nil
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
@@ -459,11 +361,17 @@ end
 
 -- Handles love.mousereleased while active.
 function Input.mousereleased(session, mx, my, button)
+  button = normalizeMouseButton(button)
+  if button then Input.mouseButtons[button] = false end
   if Input.blueprintMode and button == 1 and Input.selectStart then
-    -- Finish a drag: capture the selected rectangle into the book.
-    local bx, by = Input.blockCellAt(session, mx, my)
-    if bx then Input.selectEnd = { bx = bx, by = by } end
-    Input.captureBlueprint(session)
+    -- A press-drag-release captures on release; a two-click selection waits
+    -- for the second click (handled in mousepressed), so a release without a
+    -- drag does nothing but is still consumed so the world never paints.
+    if Input._bpMoved then
+      local bx, by = Input.blockCellAt(session, mx, my)
+      if bx then Input.selectEnd = { bx = bx, by = by } end
+      Input.captureBlueprint(session)
+    end
     return true
   end
   if button == 1 and Input.dragItem then
@@ -472,7 +380,7 @@ function Input.mousereleased(session, mx, my, button)
     if slot then
       Input.hotbar[slot] = Input.dragItem
       Input.selected = slot
-    elseif Inventory.over(vw, vh, mx, my) then
+    elseif Input.showInventory and Inventory.over(vw, vh, mx, my) then
       -- A dragged picker/blueprint entry dropped on the inventory lands in
       -- the user's collection.
       Input.addInventory(Input.dragItem)
@@ -480,8 +388,18 @@ function Input.mousereleased(session, mx, my, button)
     Input.dragItem = nil
     return true
   end
-  if button == 1 then state.painting = false end
-  if button == 2 then state.erasing = false end
+  if button == 2 and brush.draggingWarp then
+    -- Release a right-drag: relocate the selected warp to the cursor cell.
+    brush.draggingWarp = false
+    local t = Coords.transform(session.game)
+    if t and session.selectedWarp then
+      local tx, ty = Coords.toWorldCell(t, mx, my)
+      session:moveWarp(session.selectedWarp, tx, ty)
+    end
+    return true
+  end
+  if button == 1 then brush.painting = false end
+  if button == 2 then brush.erasing = false end
   return false
 end
 
@@ -489,13 +407,20 @@ end
 -- vanilla mouse path never sees editing cursor/brush moves.
 function Input.mousemoved(session, mx, my)
   if not session then return false end
+  -- A release that was lost (focus flip, cancel) must still end the drag; the
+  -- physical button state is the final word on whether the brush is live.
+  reconcileMouseHeld()
   if Input.blueprintMode and Input.selectStart then
-    -- Extend the selection rectangle while dragging.
+    -- Extend the selection rectangle (or preview under the cursor); marking the
+    -- move distinguishes a drag-release capture from a two-click selection.
     local bx, by = Input.blockCellAt(session, mx, my)
-    if bx then Input.selectEnd = { bx = bx, by = by } end
-  elseif state.painting then
+    if bx then
+      Input.selectEnd = { bx = bx, by = by }
+      Input._bpMoved = true
+    end
+  elseif brush.painting and Input.mouseButtons[1] then
     Input.paintAt(session, mx, my)
-  elseif state.erasing then
+  elseif brush.erasing and Input.mouseButtons[2] then
     Input.eraseAt(session, mx, my)
   end
   -- Track the cursor for the highlight; cheap and always useful.
@@ -508,73 +433,86 @@ function Input.mousemoved(session, mx, my)
 end
 
 -- Handles love.wheelmoved while active.
+-- Wheel events over the map must pass through to the base game so the usual
+-- world zoom behavior is preserved.  Only the overlay's own UI surfaces consume
+-- the wheel: inventory, picker, and hotbar slots.
 function Input.wheelmoved(session, dy)
   if not session then return false end
   local vw, vh = love.graphics.getDimensions()
   local mx, my = love.mouse.getPosition()
-  if Inventory.over(vw, vh, mx, my) then
-    local list = Input.inventoryList()
+  if Input.showInventory and Inventory.over(vw, vh, mx, my) then
+    local list = Inventory.list(Input)
     local per = Inventory.perPage(vw, vh)
     local max = math.max(1, math.ceil(#list / per))
     Input.inventory.scroll = math.max(1, math.min(Input.inventory.scroll + dy, max))
     return true
   end
-  if Input.showBlueprints then
-    local per = Blueprints.perPage(vw, vh)
-    local max = math.max(1, math.ceil(#Input.blueprints / per))
-    Input.blueprintScroll = math.max(1, math.min(Input.blueprintScroll + dy, max))
-    return true
-  end
   if Input.showPicker then
-    -- Scroll the left tileset-name list when the mouse is over it, else the
-    -- item grid.
-    local inList = Picker.nameAt(vw, vh, mx, my, Input.pickerTilesetScroll) ~= nil
-    if inList then
-      local names = Input.tilesetNames(session)
-      local perTs = Picker.namesPerPage(vw, vh)
+    if Input.pickerDropOpen then
+      -- Scroll the open tileset dropdown list.
+      local names = Picker.catalog(session)
+      local perTs = Picker.dropPerPage(session, vw, vh)
       local maxTs = math.max(1, math.ceil(#names / perTs))
       Input.pickerTilesetScroll = math.max(1, math.min(Input.pickerTilesetScroll + dy, maxTs))
     else
-      local list = Input.tilesetList(session, Input.pickerTileset)
+      -- Scroll the item grid.
+      local list = Picker.itemList(session, Input.pickerTileset)
       local per = Picker.perPage(vw, vh)
       local max = math.max(1, math.ceil(#list / per))
       Input.pickerScroll = math.max(1, math.min(Input.pickerScroll + dy, max))
     end
     return true
   end
-  -- Cycle hotbar selection when the picker is closed.
-  local n = #Input.hotbar
-  if n == 0 then return false end
-  Input.selected = ((Input.selected - 1 + dy) % n) + 1
-  Input.applySelection(session)
-  return true
+  if Hotbar.at(vw, vh, mx, my) then
+    local n = #Input.hotbar
+    if n == 0 then return false end
+    Input.selected = ((Input.selected - 1 + dy) % n) + 1
+    Input.applySelection(session)
+    return true
+  end
+  return false
 end
 
 -- Keyboard: returns true when the key was consumed by the overlay.
 function Input.keypressed(session, key)
-  if key == "e" then
+  -- Modal Details panel owns the keyboard while open.
+  if Input.details then return Input.keyDetails(session, key) end
+  if key == "c" then
+    -- Arm graphical destination-pick for the selected warp: the next world
+    -- click wires it to the laid-out map under the cursor.
+    if session.selectedWarp then
+      Input.warpDestPick = not Input.warpDestPick
+    end
+    return true
+  elseif key == "e" then
     Input.showPicker = not Input.showPicker
-    if Input.showPicker then Input.showBlueprints = false end
     Input.pickerScroll = 1
     Input.pickerTilesetScroll = 1
+    Input.pickerDropOpen = false
     return true
   elseif key == "b" then
-    Input.showBlueprints = not Input.showBlueprints
-    if Input.showBlueprints then Input.showPicker = false end
-    Input.blueprintScroll = 1
+    -- Blueprint preview: focus the inventory's Blueprints tab.  The inventory
+    -- is the single blueprint container; B is not a separate book.
+    Input.showPicker = false
+    Input.inventory.tab = Input.inventory.tab == 4 and 1 or 4
+    Input.inventory.scroll = 1
+    return true
+  elseif key == "tab" then
+    Input.showInventory = not Input.showInventory
     return true
   elseif key == "r" then
     -- Toggle rectangle-select capture mode.
     Input.blueprintMode = not Input.blueprintMode
     Input.selectStart, Input.selectEnd = nil, nil
+    Input._bpMoved = false
     return true
   elseif key == "p" or key == "q" then
     -- Pick the block under the mouse into the selected slot.
     local mx, my = love.mouse.getPosition()
     local vw, vh = love.graphics.getDimensions()
-    local b = Input.pickUnder(session, session.game, mx, my, vw, vh)
+    local b, tileset = Input.pickUnder(session, session.game, mx, my, vw, vh)
     if b ~= nil then
-      Input.hotbar[Input.selected] = { kind = "block", id = b }
+      Input.hotbar[Input.selected] = { kind = "block", id = b, tileset = tileset }
       Input.applySelection(session)
     end
     return true
@@ -598,36 +536,6 @@ function Input.keypressed(session, key)
     end
   end
   return false
-end
-
--- Persists the hotbar layout through the mod save system.
-function Input.saveHotbar(mod)
-  mod.save:set("mapamap_hotbar", Input.serialize())
-end
-
--- Persists the blueprint book through the mod save system.
-function Input.saveBlueprints(mod)
-  mod.save:set("mapamap_blueprints", Input.blueprints)
-end
-
--- Persists the inventory collection through the mod save system.
-function Input.saveInventory(mod)
-  mod.save:set("mapamap_inventory", Input.inventory)
-end
-
--- Loads the saved inventory collection ({ items, tab, scroll }).
-function Input.loadInventory(mod)
-  local saved = mod.save:get("mapamap_inventory", nil)
-  if saved and type(saved) == "table" and type(saved.items) == "table" then
-    Input.inventory = saved
-  else
-    Input.inventory = { items = {}, tab = 1, scroll = 1 }
-  end
-end
-
--- Loads the saved blueprint book (a list of { id, w, h, tiles }).
-function Input.loadBlueprints(mod)
-  Input.blueprints = mod.save:get("mapamap_blueprints", {})
 end
 
 return Input
