@@ -11,8 +11,6 @@ if not _G.love then _G.love = require("tests.love_stub") end
 local MapGrid = require("mods.mapamap.func.map_grid")
 local Common = require("mods.mapamap.func.common")
 
-local BACK = { north = "south", south = "north", east = "west", west = "east" }
-
 -- A minimal map def enough for MapGrid.layout / NewMap.buildDef.
 local function miniMap(id, w, h, conns)
   local blocks = {}
@@ -44,17 +42,27 @@ local function conn(def, dir)
   return (def.connections or {})[dir]
 end
 
+-- Every connection on `def` (primary + extras) must mirror back on the far
+-- map, with a negated offset (and the same size span).
 local function assertReciprocal(maps, def, where)
-  for dir, c in pairs(def.connections or {}) do
-    local other = maps[c.map]
-    local r = other and (other.connections or {})[BACK[dir]]
-    assert(other, where .. ": " .. def.id .. " -> " .. c.map .. " missing def")
-    assert(r, where .. ": " .. def.id .. "->" .. c.map .. " missing reciprocal "
-      .. tostring(BACK[dir]))
-    assert(r.map == def.id, where .. ": reciprocal back-points " .. r.map
-      .. " not " .. def.id)
-    assert(r.offset == -(c.offset or 0), where .. ": offset mismatch "
-      .. (r.offset or 0) .. " vs " .. (-(c.offset or 0)))
+  for _, dir in ipairs(Common.DIRS) do
+    for _, c in ipairs(Common.connectionsOn(def, dir)) do
+      local other = maps[c.map]
+      local back = Common.RECIP[dir]
+      local r
+      for _, rc in ipairs(Common.connectionsOn(other, back)) do
+        if rc.map == def.id then r = rc break end
+      end
+      assert(other, where .. ": " .. def.id .. " -> " .. c.map .. " missing def")
+      assert(r, where .. ": " .. def.id .. "->" .. c.map .. " missing reciprocal "
+        .. tostring(back))
+      assert(r.map == def.id, where .. ": reciprocal back-points " .. r.map
+        .. " not " .. def.id)
+      assert(r.offset == -(c.offset or 0), where .. ": offset mismatch "
+        .. (r.offset or 0) .. " vs " .. (-(c.offset or 0)))
+      assert((r.size or 0) == (c.size or 0), where .. ": size mismatch on "
+        .. def.id .. "->" .. c.map)
+    end
   end
 end
 
@@ -226,6 +234,233 @@ function test_autofillRespectsCap()
   assert(n == 64, "autofill must stop at its 64-map cap, got " .. n)
 end
 
+-- A side with a partially-offset connection leaves a seam gap: B hangs off
+-- A's south at offset 3 (covering blocks 3-10), so the seam's first 3 blocks
+-- are a free gap.
+function test_seamGapsPartialCoverage()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  maps.B = miniMap("B", 10, 9, {})
+  maps.A.connections.south = { map = "B", offset = 3, size = 7 }
+  maps.B.connections.north = { map = "A", offset = -3, size = 7 }
+  local full = MapGrid.layout(maps, "A", math.huge)
+  local rA
+  for _, e in ipairs(full) do if e.id == "A" then rA = e end end
+  local gaps = MapGrid.seamGaps(full, rA, "south")
+  assert(#gaps == 1, "one gap left on A's south seam, got " .. #gaps)
+  assert(gaps[1].start == 0 and gaps[1].width == 3,
+    "gap should be blocks 0-3, got " .. gaps[1].start .. "+" .. gaps[1].width)
+  -- The other seams stay fully free.
+  assert(#MapGrid.seamGaps(full, rA, "north") == 1
+    and #MapGrid.seamGaps(full, rA, "east") == 1,
+    "uncovered seams keep their full gap")
+end
+
+-- The seam gap becomes a smaller candidate void that slots into the leftover
+-- space, wired as a SECOND connection on A.south (extra) without overlapping
+-- B's span, plus a plain reciprocal on B.west.
+function test_gapVoidCreatesSecondConnection()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  maps.B = miniMap("B", 10, 9, {})
+  maps.A.connections.south = { map = "B", offset = 3, size = 7 }
+  maps.B.connections.north = { map = "A", offset = -3, size = 7 }
+  local s = gridSession(maps, "A")
+
+  local void
+  for _, c in ipairs(MapGrid.candidates(s, 1)) do
+    if c.bx == 0 and c.by == 9 and c.w == 3 and c.h == 9 then void = c end
+  end
+  assert(void, "the 3x9 gap void on A's south-west should be a candidate")
+  assert(void.conns >= 2, "gap void touches A and B, got " .. void.conns)
+
+  local id = assert(MapGrid.createMap(s, void.bx, void.by, void.w, void.h),
+    "gap void should be creatable")
+  local g = assert(maps[id], "created map should live in data.maps")
+  assert(g.width == 3 and g.height == 9, "gap map keeps its sized footprint")
+
+  -- A keeps B as its primary (first array entry) and stacks G as an extra on
+  -- the same side.  The engine-readable connections[dir] is the merged array.
+  assert(conn(maps.A, "south") and conn(maps.A, "south")[1].map == "B",
+    "B stays the primary south connection")
+  assert(maps.A.connectionsExtra and maps.A.connectionsExtra.south
+    and maps.A.connectionsExtra.south[1].map == id,
+    "G becomes an extra south connection on A")
+  -- The spans do not overlap: B covers [3,10], G covers [0,3].
+  local bSpan = conn(maps.A, "south")[1].size
+  local gSpan = maps.A.connectionsExtra.south[1].size
+  assert(bSpan + gSpan <= 10, "connection spans must not overlap ("
+    .. bSpan .. "+" .. gSpan .. ")")
+
+  -- G connects back to B on its east (offset 0, full height).
+  assert(conn(g, "east") and conn(g, "east").map == "B"
+    and conn(g, "east").offset == 0,
+    "G should connect east to B at offset 0")
+  assert(conn(g, "north") and conn(g, "north").map == "A"
+    and conn(g, "north").offset == 0,
+    "G should connect north to A at offset 0")
+  assertReciprocal(maps, maps.A, "A-with-extra")
+  assertReciprocal(maps, g, "G")
+end
+
+-- The multi-connection graph stays traversable: layout places both south
+-- neighbours (B at offset 3, G at offset 0) and BFS walks the union so G is
+-- reachable from the root, exactly where it sits.
+function test_layoutTraversesExtraConnections()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  maps.B = miniMap("B", 10, 9, {})
+  maps.A.connections.south = { map = "B", offset = 3, size = 7 }
+  maps.B.connections.north = { map = "A", offset = -3, size = 7 }
+  local s = gridSession(maps, "A")
+  local id = MapGrid.createMap(s, 0, 9, 3, 9)
+  assert(id, "gap map should be creatable")
+
+  local b, g
+  for _, r in ipairs(MapGrid.layout(maps, "A", math.huge)) do
+    if r.id == "B" then b = r end
+    if r.id == id then g = r end
+  end
+  assert(b and b.x == 3 and b.y == 9,
+    "B should sit at (3,9), got " .. (b and b.x .. "," .. b.y or "nil"))
+  assert(g and g.x == 0 and g.y == 9 and g.w == 3,
+    "G should sit at (0,9) sized 3 wide, got "
+    .. (g and g.x .. "," .. g.y .. " " .. g.w .. "x" .. g.h or "nil"))
+end
+
+-- The east seam works like the south seam on the vertical axis: a map hung at
+-- a vertical offset leaves a y-gap above it, which becomes a sized gap void
+-- wired as a second connection on A.east (extra) plus B.north.
+function test_gapVoidOnEastSeam()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  maps.B = miniMap("B", 10, 9, {})
+  maps.A.connections.east = { map = "B", offset = 3, size = 7 }
+  maps.B.connections.west = { map = "A", offset = -3, size = 7 }
+  local s = gridSession(maps, "A")
+
+  -- A.east's free seam is y in [0,3] above B.
+  local full = MapGrid.layout(maps, "A", math.huge)
+  local gaps = MapGrid.seamGaps(full, findRect(full, "A"), "east")
+  assert(#gaps == 1 and gaps[1].start == 0 and gaps[1].width == 3,
+    "A.east should leave one 3-block y-gap, got "
+    .. #gaps .. " (" .. (gaps[1] and gaps[1].start .. "+" .. gaps[1].width or "?") .. ")")
+
+  local void
+  for _, c in ipairs(MapGrid.candidates(s, 1)) do
+    if c.bx == 10 and c.by == 0 and c.w == 10 and c.h == 3 then void = c end
+  end
+  assert(void, "the 10x3 gap void on A's east should be a candidate")
+  assert(void.conns >= 2, "gap void touches A and B, got " .. void.conns)
+
+  local id = assert(MapGrid.createMap(s, void.bx, void.by, void.w, void.h),
+    "gap void should be creatable")
+  local g = assert(maps[id], "created map should live in data.maps")
+  assert(g.width == 10 and g.height == 3, "gap map keeps its sized footprint")
+
+  -- A keeps B as its primary (first array entry); G stacks as an extra.
+  assert(conn(maps.A, "east") and conn(maps.A, "east")[1].map == "B",
+    "B stays the primary east connection")
+  assert(maps.A.connectionsExtra and maps.A.connectionsExtra.east
+    and maps.A.connectionsExtra.east[1].map == id,
+    "G becomes an extra east connection on A")
+  local bSpan = conn(maps.A, "east")[1].size
+  local gSpan = maps.A.connectionsExtra.east[1].size
+  assert(bSpan + gSpan <= 10, "vertical spans must not overlap ("
+    .. bSpan .. "+" .. gSpan .. ")")
+
+  -- G connects west to A and south to B; B reciprocates north to G.
+  assert(conn(g, "west") and conn(g, "west").map == "A"
+    and conn(g, "west").offset == 0,
+    "G should connect west to A at offset 0")
+  assert(conn(g, "south") and conn(g, "south").map == "B"
+    and conn(g, "south").offset == 0,
+    "G should connect south to B at offset 0")
+  assert(conn(maps.B, "north") and conn(maps.B, "north").map == id,
+    "B should connect north to G")
+  assertReciprocal(maps, maps.A, "A-with-extra-east")
+  assertReciprocal(maps, g, "G-east")
+end
+
+-- autofill closes a partially-covered side by slotting a map into the gap,
+-- so no empty space remains beside a hanging map.
+function test_autofillClosesPartialSeam()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  maps.B = miniMap("B", 10, 9, {})
+  maps.A.connections.south = { map = "B", offset = 3, size = 7 }
+  maps.B.connections.north = { map = "A", offset = -3, size = 7 }
+  local s = gridSession(maps, "A")
+  local created = MapGrid.autofill(s, 1)
+  assert(created >= 2, "autofill should fill the gap plus more, got " .. created)
+  -- The gap is gone: no 3-wide void remains on A's south-west.
+  for _, c in ipairs(MapGrid.candidates(s, 1)) do
+    assert(not (c.bx == 0 and c.by == 9 and c.w == 3),
+      "the gap void should be closed after autofill")
+  end
+  for _, r in ipairs(MapGrid.layout(maps, "A", math.huge)) do
+    assertReciprocal(maps, r.def, "ring-" .. r.id)
+  end
+end
+
+-- Paint-time void creation: a block 1 step east of A creates a new map flush
+-- against A's east seam, with reciprocal wiring.
+function test_createForPaintEastOfA()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  local s = gridSession(maps, "A")
+  local id = MapGrid.createForPaint(s, 10, 4)
+  assert(id, "creating a map 1 block east of A should succeed")
+  local m = maps[id]
+  assert(m and m.height == 9,
+    "created map seam-parallel dimension matches A's height")
+  assert(m.width == 1,
+    "created map axis-parallel dimension spans the 1-block gap, got " .. tostring(m.width))
+  assert(m.connections.west and m.connections.west.map == "A",
+    "created map connects west to A")
+  assert(conn(maps.A, "east") and conn(maps.A, "east").map == id,
+    "A connects east to the created map")
+  assertReciprocal(maps, m, "created-east")
+end
+
+-- Painting far from any map (no flush contact) is a no-op.
+function test_createForPaintFarAway()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  local s = gridSession(maps, "A")
+  local id = MapGrid.createForPaint(s, 100, 100)
+  assert(id == nil, "painting 100 blocks away should not create a map")
+end
+
+-- Paint-time rect creation: a 2x2 rect flush east of A creates a single map
+-- containing the whole rect.
+function test_createForBlocksEastRect()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  local s = gridSession(maps, "A")
+  local id = MapGrid.createForBlocks(s, 10, 3, 2, 2)
+  assert(id, "creating a 2x2 map east of A should succeed")
+  local m = maps[id]
+  assert(m and m.height == 9,
+    "created rect map seam-parallel dimension matches A's height")
+  assert(m.width == 2,
+    "created rect map axis-parallel dimension spans the 2-block gap, got " .. tostring(m.width))
+  assertReciprocal(maps, m, "created-rect-east")
+end
+
+-- When the rect is fully covered by existing maps, no creation happens.
+function test_createForBlocksFullyCovered()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  local s = gridSession(maps, "A")
+  local id = MapGrid.createForBlocks(s, 0, 0, 5, 5)
+  assert(id == nil, "fully covered rect should not create a map")
+end
+
+-- Paint-time west creation: a block 1 step west of A creates a map flush
+-- against A's west seam.
+function test_createForPaintWestOfA()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  local s = gridSession(maps, "A")
+  local id = MapGrid.createForPaint(s, -1, 4)
+  assert(id, "creating a map 1 block west of A should succeed")
+  local m = maps[id]
+  assert(m and m.connections.east and m.connections.east.map == "A",
+    "created map connects east to A")
+  assertReciprocal(maps, m, "created-west")
+end
+
 return {
   name = "MAPAMAP_GRID",
   tests = {
@@ -237,5 +472,15 @@ return {
     "test_createMapWiringAndPersistence",
     "test_autofillDepthLimitedAndStops",
     "test_autofillRespectsCap",
+    "test_seamGapsPartialCoverage",
+    "test_gapVoidCreatesSecondConnection",
+    "test_gapVoidOnEastSeam",
+    "test_layoutTraversesExtraConnections",
+    "test_autofillClosesPartialSeam",
+    "test_createForPaintEastOfA",
+    "test_createForPaintFarAway",
+    "test_createForBlocksEastRect",
+    "test_createForBlocksFullyCovered",
+    "test_createForPaintWestOfA",
   },
 }
