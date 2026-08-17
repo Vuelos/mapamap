@@ -99,6 +99,30 @@ function test_tabAt_fit()
   assert(Inventory.tabAt(VW, VH, tx, ty - 40) == nil, "above the tab row is nil")
 end
 
+-- Font stub with a width method (glyphs are 8px each, matching the nil-font
+-- fallback) so button sizes are deterministic in tests.
+local fakeFont = { width = function(str) return #str * 8 end }
+
+function test_tabRectTextFit()
+  local x1, _, w1, _ = Inventory.tabRect(VW, VH, 1, fakeFont)
+  local x2, _, w2, _ = Inventory.tabRect(VW, VH, 2, fakeFont)
+  local x3, _, w3, _ = Inventory.tabRect(VW, VH, 3, fakeFont)
+  local x4, _, w4, _ = Inventory.tabRect(VW, VH, 4, fakeFont)
+  assert(w2 > w1, "Objects is wider than Tiles")
+  assert(w3 == w1, "Warps and Tiles are the same length")
+  assert(w4 > w2, "Blueprints is the widest tab")
+  assert(x2 == x1 + w1 + Inventory.TAB_GAP, "tab 2 starts one gap after tab 1")
+  assert(x3 == x2 + w2 + Inventory.TAB_GAP, "tab 3 starts one gap after tab 2")
+  assert(x4 > x3 + w3, "tab 4 starts after tab 3")
+  -- Hit-testing agrees with the per-text rects.
+  local px, py = Inventory.rect(VW, VH)
+  local ty = py + Inventory.PAD + Inventory.TAB_H / 2
+  assert(Inventory.tabAt(VW, VH, x4 + w4 / 2, ty, fakeFont) == 4,
+    "Blueprints hit-tests inside its own button")
+  assert(Inventory.tabAt(VW, VH, x2 + w2 + Inventory.TAB_GAP / 2, ty, fakeFont) == nil,
+    "the gap between tabs hit-tests as nothing")
+end
+
 function test_listFor_filtersByTab()
   local items = {
     { kind = "block", id = 1 },
@@ -184,6 +208,81 @@ function test_dragDropOntoInventoryAddsItem()
   assert(#Input.inventory.items == 1, "released item should join the inventory")
   assert(Input.inventory.items[1].id == 9, "inventory holds the carried item")
   assert(Input.dragItem == nil, "drag cleared after release")
+end
+
+function test_hotbarDragSwapsSlots()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  Input.hotbar[1] = { kind = "block", id = 1 }
+  Input.hotbar[2] = { kind = "block", id = 2 }
+  Input.selected = 1
+  local x1, y1, w1, _ = Hotbar.slot(1, VW, VH)
+  local x2, y2, w2, _ = Hotbar.slot(2, VW, VH)
+  local consumed = Input.mousepressed(s, game, x1 + w1 / 2, y1 + w1 / 2, 1)
+  assert(consumed, "press on a filled hotbar slot is consumed")
+  assert(Input.dragItem == Input.hotbar[1] and Input.dragFromSlot == 1,
+    "press on a filled slot arms a drag from that slot")
+  local released = Input.mousereleased(s, x2 + w2 / 2, y2 + w2 / 2, 1)
+  assert(released, "release over another slot is consumed")
+  assert(Input.hotbar[1].id == 2 and Input.hotbar[2].id == 1,
+    "the two slots swap so nothing is lost")
+  assert(Input.selected == 2, "selection moves to the drop slot")
+  assert(Input.dragItem == nil and Input.dragFromSlot == nil,
+    "drag state clears after the swap")
+end
+
+function test_hotbarDragAddsCopyToInventory()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  Input.hotbar[1] = { kind = "block", id = 3 }
+  Input.selected = 1
+  local x1, y1, w1, _ = Hotbar.slot(1, VW, VH)
+  Input.mousepressed(s, game, x1 + w1 / 2, y1 + w1 / 2, 1)
+  assert(Input.dragItem and Input.dragFromSlot == 1, "drag armed from slot 1")
+  local cx, cy = inventoryCellCentre(1)
+  local released = Input.mousereleased(s, cx, cy, 1)
+  assert(released, "release over the inventory panel is consumed")
+  assert(#Input.inventory.items == 1 and Input.inventory.items[1].id == 3,
+    "dragged hotbar item joins the inventory")
+  assert(Input.hotbar[1] and Input.hotbar[1].id == 3,
+    "the hotbar copy stays in its slot")
+  assert(Input.dragItem == nil and Input.dragFromSlot == nil,
+    "drag state clears after the drop")
+end
+
+function test_cancelClearsHotbarDrag()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  Input.hotbar[1] = { kind = "block", id = 4 }
+  Input.selected = 1
+  local x1, y1, w1, _ = Hotbar.slot(1, VW, VH)
+  Input.mousepressed(s, game, x1 + w1 / 2, y1 + w1 / 2, 1)
+  assert(Input.dragItem and Input.dragFromSlot == 1, "drag armed before the cancel")
+  Input.cancelled()
+  assert(Input.dragItem == nil and Input.dragFromSlot == nil,
+    "a cancelled pointer retires the drag so nothing waits for a release")
+end
+
+function test_lostReleaseOutsideUiClearsDrag()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  assert(s, "no session")
+  resetInput()
+  Input.hotbar[1] = { kind = "block", id = 5 }
+  Input.selected = 1
+  local x1, y1, w1, _ = Hotbar.slot(1, VW, VH)
+  Input.mousepressed(s, game, x1 + w1 / 2, y1 + w1 / 2, 1)
+  assert(Input.dragItem and Input.dragFromSlot == 1, "drag is armed on press")
+
+  local wasDown = love.mouse.isDown
+  love.mouse.isDown = function() return false end
+  Input.mousemoved(s, 0, 0)
+  love.mouse.isDown = wasDown
+
+  assert(Input.dragItem == nil and Input.dragFromSlot == nil,
+    "a physical release outside the UI clears the drag even without a release event")
 end
 
 function test_wheelScrollsInventoryPage()
@@ -375,12 +474,16 @@ return {
     "test_geometry_rows",
     "test_itemAt_cellGrid",
     "test_tabAt_fit",
+    "test_tabRectTextFit",
     "test_listFor_filtersByTab",
     "test_tabListShowsOnlySavedItems",
     "test_tabListEmptyWhenNoSavedItems",
     "test_inventoryCellLoadsIntoActiveSlot",
     "test_tabClickSwitchesTab",
     "test_dragDropOntoInventoryAddsItem",
+    "test_hotbarDragSwapsSlots",
+    "test_hotbarDragAddsCopyToInventory",
+    "test_cancelClearsHotbarDrag",
     "test_wheelScrollsInventoryPage",
     "test_blueprintCaptureAddsToInventory",
     "test_blueprintCaptureCanSpanVisibleMaps",
