@@ -181,10 +181,27 @@ function Inventory.tabList(session, state)
 end
 
 -- Adds an item to the inventory, switching to its tab and scrolling so the
--- newest entry is visible.
+-- newest entry is visible.  Template items (newWarp / newObject) are always
+-- inserted as the first element of their tab.
 function Inventory.add(ui, item)
   if not item then return end
-  table.insert(ui.inventory.items, item)
+  local isTemplate = item.newWarp or item.newObject
+  if isTemplate then
+    -- Find the first item belonging to the same tab and insert before it
+    -- so the template is always first in that tab's filtered list.
+    local tabIdx = Inventory.tabFor(item)
+    local insertPos = 1
+    for i, it in ipairs(ui.inventory.items) do
+      if Inventory.tabFor(it) == tabIdx then
+        insertPos = i
+        break
+      end
+      insertPos = i + 1
+    end
+    table.insert(ui.inventory.items, insertPos, item)
+  else
+    table.insert(ui.inventory.items, item)
+  end
   local tabIdx = Inventory.tabFor(item)
   ui.inventory.tab = tabIdx
   local vw, vh = love.graphics.getDimensions()

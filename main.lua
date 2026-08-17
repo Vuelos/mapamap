@@ -14,6 +14,7 @@
 local Session = require("mods.mapamap.session")
 local Input = require("mods.mapamap.input")
 local Overlay = require("mods.mapamap.components.overlay")
+local Coords = require("mods.mapamap.func.coords")
 local Save = require("mods.mapamap.func.save")
 local Snapshot = require("mods.mapamap.func.snapshot")
 local Common = require("mods.mapamap.func.common")
@@ -246,6 +247,14 @@ local function reconcileSession(mod, game)
   ensureConnectedMaps(session)
   Input.onMapEntry(session)
   Input.applySelection(session)
+  -- Re-sync the cursor from the current mouse position so the highlight
+  -- doesn't snap to (0,0) until the next physical mouse move event.
+  local mx, my = love.mouse.getPosition()
+  local t = Coords.transform(game)
+  if t then
+    local tx, ty = Coords.toWorldCell(t, mx, my)
+    session.cursorBx, session.cursorBy = tx, ty
+  end
 end
 
 -- New-map creation: builds an adjacent map (with reciprocal connection),
@@ -288,6 +297,7 @@ local function run(mod)
   -- chain so lower-priority mods and the vanilla no-op still run.
   mod.hooks:wrap("render.hud", function(nextFn, game, viewport)
     if active and session then
+      reconcileSession(mod, game)
       Overlay.draw(session, game, viewport)
     end
     if nextFn then return nextFn(game, viewport) end

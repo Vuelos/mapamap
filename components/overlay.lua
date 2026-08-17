@@ -298,43 +298,49 @@ function Overlay.draw(session, game, viewport)
   love.graphics.origin()
   love.graphics.setColor(1, 1, 1, 1)
 
-  -- World markers first so the HUD panels always render above them.
-  Borders.draw(session, game)
-  drawCursor(session, game)
-  drawBlueprintPreview(session, game)
-  drawSelection(session, game)
-  drawWarps(session, game)
-  drawDestPick(session, game)
-  -- HUD panels on top, in open/close order so the picker and Details modal
-  -- cover the inventory/hotbar rather than being hidden behind them.
-  if Input.showInventory then
-    Inventory.draw(session, Input.inventory, vw, vh, session.font, Input.selectedItem())
-  end
-  Hotbar.draw(session, vw, vh, Input.hotbar, Input.selected, session.font)
-  if Input.showPicker then
-    Picker.draw(session, vw, vh, {
-      selection = Input.pickerTileset,
-      scroll = Input.pickerScroll,
-      listScroll = Input.pickerTilesetScroll,
-      dropOpen = Input.pickerDropOpen,
-    }, session.font)
-  end
-  if Input.details then
-    local Details = require("mods.mapamap.components.details")
-    Details.draw(session, Input.details, vw, vh, session.font)
-  end
+  -- Wrap the draw body so love.graphics.pop() always runs even when a sub-
+  -- draw throws; without this, an error skips the pop and the graphics state
+  -- stack accumulates one level per errored frame until it overflows.
+  local ok, err = pcall(function()
+    -- World markers first so the HUD panels always render above them.
+    Borders.draw(session, game)
+    drawCursor(session, game)
+    drawBlueprintPreview(session, game)
+    drawSelection(session, game)
+    drawWarps(session, game)
+    drawDestPick(session, game)
+    -- HUD panels on top, in open/close order so the picker and Details modal
+    -- cover the inventory/hotbar rather than being hidden behind them.
+    if Input.showInventory then
+      Inventory.draw(session, Input.inventory, vw, vh, session.font, Input.selectedItem())
+    end
+    Hotbar.draw(session, vw, vh, Input.hotbar, Input.selected, session.font)
+    if Input.showPicker then
+      Picker.draw(session, vw, vh, {
+        selection = Input.pickerTileset,
+        scroll = Input.pickerScroll,
+        listScroll = Input.pickerTilesetScroll,
+        dropOpen = Input.pickerDropOpen,
+      }, session.font)
+    end
+    if Input.details then
+      local Details = require("mods.mapamap.components.details")
+      Details.draw(session, Input.details, vw, vh, session.font)
+    end
 
-  -- A picked-up item (picker or hotbar drag) floats under the cursor above
-  -- every panel, faded, so the drop target stays visible underneath.
-  if Input.dragItem then
-    local mx, my = love.mouse.getPosition()
-    local size = 40
-    love.graphics.setColor(0, 0, 0, 0.25)
-    love.graphics.rectangle("fill", mx - size / 2 + 3, my - size / 2 + 3, size, size)
-    Item.draw(session, Input.dragItem, mx - size / 2, my - size / 2, size, nil, 0.8)
-  end
+    -- A picked-up item (picker or hotbar drag) floats under the cursor above
+    -- every panel, faded, so the drop target stays visible underneath.
+    if Input.dragItem then
+      local mx, my = love.mouse.getPosition()
+      local size = 40
+      love.graphics.setColor(0, 0, 0, 0.25)
+      love.graphics.rectangle("fill", mx - size / 2 + 3, my - size / 2 + 3, size, size)
+      Item.draw(session, Input.dragItem, mx - size / 2, my - size / 2, size, nil, 0.8)
+    end
+  end)
 
   love.graphics.pop()
+  if not ok then error(err) end
 end
 
 return Overlay
