@@ -6,9 +6,9 @@
 -- map's name written across it (vertically on the side edges).  The styling
 -- mirrors the map_editor mod's map-edge drawing: green outlines (current map
 -- ringed in yellow) and orange primary-connection borders (magenta for extras).
--- This is a focused draw module following the func/ convention;
--- components/overlay.lua owns the global draw orchestration and calls into
--- here.  Draws in LOVE screen units (the caller has already pushed an identity
+-- This is a focused draw component; components/overlay.lua owns the global
+-- draw orchestration and calls into here (require("mods.mapamap.components.mapborders")).
+-- Draws in LOVE screen units (the caller has already pushed an identity
 -- matrix via push("all") + origin()).
 
 local Coords = require("mods.mapamap.func.coords")
