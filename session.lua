@@ -19,10 +19,53 @@ local PaletteFX = require("src.render.PaletteFX")
 
 local Session = {}
 
+local function fallbackFont()
+  return {
+    draw = function() end,
+    width = function(str) return #tostring(str) * 8 end,
+    getWidth = function(str) return #tostring(str) * 8 end,
+  }
+end
+
+local function resolveFont(mod)
+  local ui = mod and mod.ui or {}
+  if ui.Font and type(ui.Font) == "table" then return ui.Font end
+  if love and love.graphics and love.graphics.getFont then
+    local font = love.graphics.getFont()
+    if font then
+      local wrapped = {
+        draw = function(str, x, y)
+          if font.draw then return font.draw(str, x, y) end
+          if font.print then return font:print(str, x, y) end
+          return nil
+        end,
+        width = function(str)
+          if font.getWidth then return font:getWidth(str) end
+          if font.width then return font.width(str) end
+          return #tostring(str) * 8
+        end,
+        getWidth = function(str)
+          if font.getWidth then return font:getWidth(str) end
+          if font.width then return font.width(str) end
+          return #tostring(str) * 8
+        end,
+      }
+      ui.Font = wrapped
+      if mod then mod.ui = ui end
+      return wrapped
+    end
+  end
+  local font = fallbackFont()
+  ui.Font = font
+  if mod then mod.ui = ui end
+  return font
+end
+
 -- Mix reusable method tables onto the session.
 local function mixin(t, src) for k, v in pairs(src) do t[k] = v end end
 mixin(Session, require("mods.mapamap.func.map_ops"))
 mixin(Session, require("mods.mapamap.func.editor_neighbors"))
+mixin(Session, require("mods.mapamap.func.warps"))
 
 -- Creates a session editing `mapId`.  Returns the session or nil when the
 -- map or its tileset cannot be loaded.
@@ -49,7 +92,7 @@ function Session.new(mod, game, mapId)
     _originalSnapshot = nil,
     originalRecipConnections = {},
     originalEncounters = nil,
-    font = mod.ui.Font,
+    font = resolveFont(mod),
     mapW = def.width * Common.BLOCK_PX,
     mapH = def.height * Common.BLOCK_PX,
     neighbors = {},
@@ -403,145 +446,29 @@ function Session:adoptNewMap(newId)
   return newId
 end
 
--- --- warp editing ------------------------------------------------------------
-
--- The warp wired at a walk-grid cell on the edited map, or nil.  Coordinates
--- are walk-grid cells (px = x*16), like objects.
-function Session:warpAt(cellX, cellY)
-  for _, w in ipairs(self.def.warps or {}) do
-    if (w.x or -1) == cellX and (w.y or -1) == cellY then return w end
+-- Attempts to create a map on the void at the cursor position (single block)
+-- or covering the given block rect.  Returns the new map id or nil when no
+-- flush connection is possible.  The new map is wired with reciprocal
+-- connections and added to the neighbor set immediately.
+function Session:createMapAtCursor(bx0, by0, bw, bh)
+  local MapGrid = require("mods.mapamap.func.map_grid")
+  if bx0 and by0 and bw and bh then
+    return MapGrid.createForBlocks(self, bx0, by0, bw, bh)
   end
-  return nil
-end
-
--- Every warp on every visible laid-out map (the edited map plus the neighbor
--- set), flattened with its map's world-pixel offset so the overlay can project
--- them all onto the shared world.  Returns { { warp, ox, oy }, ... }; only the
--- edited map's warps (ox = 0, oy = 0) can ever be the live selection.
-function Session:visibleWarps()
-  local out = {}
-  local function collect(def, ox, oy)
-    for _, w in ipairs(def and def.warps or {}) do
-      out[#out + 1] = { warp = w, ox = ox, oy = oy }
-    end
-  end
-  collect(self.def, 0, 0)
-  for _, nb in ipairs(self.neighbors or {}) do
-    collect(nb.def, nb.ox, nb.oy)
-  end
-  return out
-end
-
--- The 1-based position of `warp` in the edited map's warps array (the engine
--- numbers warps by array index), or nil.
-function Session:warpIndex(warp)
-  for i, w in ipairs(self.def.warps or {}) do
-    if w == warp then return i end
-  end
-  return nil
-end
-
--- Bounds check for a walk-grid cell against a map def.
-local function cellIn(def, x, y)
-  return x >= 0 and y >= 0 and x < def.width * 2 and y < def.height * 2
-end
-
--- Places a new warp at `cellX, cellY` leading to `destMap` warp number
--- `destWarp` (0-based, the engine's numbering).  Returns the warp or nil.
-function Session:placeWarp(cellX, cellY, destMap, destWarp)
-  if not cellIn(self.def, cellX, cellY) then return nil end
-  if self.undo then self.undo:capture(self.def) end
-  self.def.warps = self.def.warps or {}
-  local w = { x = cellX, y = cellY,
-              destMap = destMap or self.mapId, destWarp = destWarp or 0 }
-  table.insert(self.def.warps, w)
-  self.mapChanged = true
-  return w
-end
-
--- Moves an existing warp to a cell and marks the map changed.
-function Session:moveWarp(warp, cellX, cellY)
-  if not warp then return false end
-  if not cellIn(self.def, cellX, cellY) then return false end
-  if self.undo then self.undo:capture(self.def) end
-  warp.x, warp.y = cellX, cellY
-  self.mapChanged = true
-  return true
-end
-
--- Re-points a warp's destination (destMap and/or destWarp, 0-based).
-function Session:setWarpDest(warp, destMap, destWarp)
-  if not warp then return false end
-  if self.undo then self.undo:capture(self.def) end
-  if destMap then warp.destMap = destMap end
-  if destWarp ~= nil then warp.destWarp = destWarp end
-  self.mapChanged = true
-  return true
-end
-
--- Sets a warp's display label.
-function Session:setWarpLabel(warp, label)
-  if not warp then return false end
-  if self.undo then self.undo:capture(self.def) end
-  warp.label = label
-  self.mapChanged = true
-  return true
-end
-
--- Removes a warp from the edited map.
-function Session:removeWarp(warp)
-  local list = self.def.warps or {}
-  for i = #list, 1, -1 do
-    if list[i] == warp then
-      if self.undo then self.undo:capture(self.def) end
-      table.remove(list, i)
-      self.mapChanged = true
-      return true
-    end
-  end
-  return false
-end
-
--- Graphically wires `warp` to land on `destMapId` at `cellX, cellY` (walk-grid
--- cells on the destination map): the destination map gets a warp there (reused
--- when one already sits at the cell) whose reciprocal points back at the edited
--- warp, so the pair is traversable both ways.  The destination map is marked
--- dirty so its warps are diff-persisted when it's a loaded neighbor.
-function Session:connectWarpToCell(warp, destMapId, cellX, cellY)
-  if not warp then return false end
-  local destDef = self.data.maps[destMapId]
-  if not destDef or not cellIn(destDef, cellX, cellY) then return false end
-  if self.undo then self.undo:capture(self.def) end
-  destDef.warps = destDef.warps or {}
-  local idx
-  for i, dw in ipairs(destDef.warps) do
-    if (dw.x or -1) == cellX and (dw.y or -1) == cellY then idx = i; break end
-  end
-  local destWarp
-  if idx then
-    destWarp = destDef.warps[idx]
-  else
-    destWarp = { x = cellX, y = cellY, destMap = self.mapId }
-    table.insert(destDef.warps, destWarp)
-    idx = #destDef.warps
-  end
-  local srcIdx = self:warpIndex(warp) or 1
-  warp.destMap = destMapId
-  warp.destWarp = idx - 1
-  destWarp.destMap = self.mapId
-  destWarp.destWarp = srcIdx - 1
-  if destDef ~= self.def then
-    self.neighborDirty = self.neighborDirty or {}
-    self.neighborDirty[destMapId] = true
-  end
-  self.mapChanged = true
-  return true
+  local bx = math.floor(self.cursorBx / 2)
+  local by = math.floor(self.cursorBy / 2)
+  return MapGrid.createForPaint(self, bx, by)
 end
 
 -- --- object editing (mirrors the warp helpers) ------------------------------
 --
 -- Objects live in `def.objects` (the same table the engine reads on map
 -- enter) as { x, y, sprite|item, object_type, index, ... } records.
+
+-- Bounds check for a walk-grid cell against a map def.
+local function cellIn(def, x, y)
+  return x >= 0 and y >= 0 and x < def.width * 2 and y < def.height * 2
+end
 
 -- The object at a walk-grid cell on the edited map, or nil.
 function Session:objectAt(cellX, cellY)

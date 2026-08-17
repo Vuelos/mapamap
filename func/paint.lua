@@ -98,12 +98,13 @@ function Paint.paintAt(ui, brush, session, mx, my)
       session:reloadGraftedRenderers()
     end
   end
-  -- Grid expansion runs at load (MapGrid.autofill), never on paint: a cursor
-  -- beyond every laid-out map body is a no-op (no map creation, no growth).
-  -- paintBlock handles in-body cells and cells inside a neighbor's body.
+  -- When the cursor lands on void (outside every laid-out map body) try to
+  -- create a new map flush against the nearest host.  On failure (no flush
+  -- contact possible) the paint is a no-op.
   local side = session:cellEdgeSide(session.cursorBx, session.cursorBy)
   if side and not session:cellInsideNeighbor(session.cursorBx, session.cursorBy) then
-    return false
+    local newId = session:createMapAtCursor()
+    if not newId then return false end
   end
   session:snapCursorToBlock()
   session:paintBlock()

@@ -95,7 +95,17 @@ function MapOps.expandMap(self, needL, needR, needT, needB)
     end
       
     local c = self.def.connections or {}
-
+    local extra = self.def.connectionsExtra
+    local function shiftSide(list)
+      for _, conn in ipairs(list or {}) do
+        local d = conn.dir
+        if d == "north" or d == "south" then
+          conn.offset = (conn.offset or 0) + cellShiftX / 2
+        elseif d == "east" or d == "west" then
+          conn.offset = (conn.offset or 0) + cellShiftY / 2
+        end
+      end
+    end
     if c.north then
       c.north.offset = (c.north.offset or 0) + cellShiftX / 2
     end
@@ -110,6 +120,9 @@ function MapOps.expandMap(self, needL, needR, needT, needB)
 
     if c.west then
       c.west.offset = (c.west.offset or 0) + cellShiftY / 2
+    end
+    for _, dir in ipairs(Common.DIRS) do
+      shiftSide(extra and extra[dir])
     end
   end
 
@@ -279,6 +292,54 @@ function MapOps.paintBlueprint(self, bp)
       end
     end
   end
+  
+  -- Paint warps from the blueprint
+  local cursorCx0 = self.cursorBx
+  local cursorCy0 = self.cursorBy
+  if bp.warps then
+    for _, bpWarp in ipairs(bp.warps) do
+      local cx = cursorCx0 + bpWarp.x
+      local cy = cursorCy0 + bpWarp.y
+      local mapId, def = Neighbors.mapAt(self.def, self.neighbors, cx, cy)
+      if def and cx >= 0 and cy >= 0 and cx < def.width * 2 and cy < def.height * 2 then
+        def.warps = def.warps or {}
+        local newWarp = {}
+        for k, v in pairs(bpWarp) do newWarp[k] = v end
+        newWarp.x = cx
+        newWarp.y = cy
+        if self.undo then self.undo:capture(def) end
+        table.insert(def.warps, newWarp)
+        changed = true
+        if mapId ~= nil then self.neighborDirty[mapId] = true end
+      end
+    end
+  end
+  
+  -- Paint objects from the blueprint
+  if bp.objects then
+    for _, bpObject in ipairs(bp.objects) do
+      local cx = cursorCx0 + bpObject.x
+      local cy = cursorCy0 + bpObject.y
+      local mapId, def = Neighbors.mapAt(self.def, self.neighbors, cx, cy)
+      if def and cx >= 0 and cy >= 0 and cx < def.width * 2 and cy < def.height * 2 then
+        def.objects = def.objects or {}
+        local maxIndex = 0
+        for _, o in ipairs(def.objects) do
+          if (o.index or 0) > maxIndex then maxIndex = o.index end
+        end
+        local newObject = {}
+        for k, v in pairs(bpObject) do newObject[k] = v end
+        newObject.x = cx
+        newObject.y = cy
+        newObject.index = maxIndex + 1
+        if self.undo then self.undo:capture(def) end
+        table.insert(def.objects, newObject)
+        changed = true
+        if mapId ~= nil then self.neighborDirty[mapId] = true end
+      end
+    end
+  end
+  
   if changed then
     for tilesetId in pairs(graftedTilesets) do
       Graft.invalidateTileset(self.data, tilesetId)
