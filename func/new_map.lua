@@ -9,10 +9,8 @@
 local NewMap = {}
 local Neighbors = require("mods.mapamap.func.neighbors")
 local Common = require("mods.mapamap.func.common")
+local Connections = require("mods.mapamap.func.connections")
 local BLOCK_PX = Common.BLOCK_PX
-
--- Opposite connection side for reciprocal links.
-local RECIP = { north = "south", south = "north", east = "west", west = "east" }
 
 -- True when `name` is already used as another map's display name (a map's
 -- display name is its `name` field, falling back to its id).
@@ -90,10 +88,9 @@ function NewMap.createSidedMap(self, side, offset)
   data.maps[newId] = newDef
 
   -- Connection from the current map to the new map, plus the reciprocal.
-  self.def.connections = self.def.connections or {}
-  self.def.connections[side] = { map = newId, offset = offset or 0 }
-  newDef.connections = newDef.connections or {}
-  newDef.connections[RECIP[side]] = { map = self.mapId, offset = -(offset or 0) }
+  -- Goes through addConnection so an already-occupied side keeps its primary
+  -- and stacks this one as an extra instead of clobbering it.
+  Connections.addConnection(self.def, newDef, side, offset or 0, width)
 
   -- Wire reciprocal connections to every other map flush against the new
   -- body: recompute the world rect of the new map and test every laid-out
@@ -105,21 +102,22 @@ function NewMap.createSidedMap(self, side, offset)
       local nx0, ny0 = nb.ox, nb.oy
       local nx1 = nx0 + nb.def.width * BLOCK_PX
       local ny1 = ny0 + nb.def.height * BLOCK_PX
-      local flushSide, flushOff
+      local flushSide, flushOff, flushSpan
       if ny1 == y0 and nx0 < x1 and x0 < nx1 then
         flushSide, flushOff = "north", (nx0 - x0) / BLOCK_PX
+        flushSpan = (math.min(x1, nx1) - math.max(x0, nx0)) / BLOCK_PX
       elseif y1 == ny0 and nx0 < x1 and x0 < nx1 then
         flushSide, flushOff = "south", (nx0 - x0) / BLOCK_PX
+        flushSpan = (math.min(x1, nx1) - math.max(x0, nx0)) / BLOCK_PX
       elseif nx1 == x0 and ny0 < y1 and y0 < ny1 then
         flushSide, flushOff = "west", (ny0 - y0) / BLOCK_PX
+        flushSpan = (math.min(y1, ny1) - math.max(y0, ny0)) / BLOCK_PX
       elseif x1 == nx0 and ny0 < y1 and y0 < ny1 then
         flushSide, flushOff = "east", (ny0 - y0) / BLOCK_PX
+        flushSpan = (math.min(y1, ny1) - math.max(y0, ny0)) / BLOCK_PX
       end
       if flushSide then
-        newDef.connections[flushSide] = { map = nb.id, offset = flushOff }
-        nb.def.connections = nb.def.connections or {}
-        nb.def.connections[RECIP[flushSide]] =
-          { map = newId, offset = -flushOff }
+        Connections.addConnection(newDef, nb.def, flushSide, flushOff, flushSpan)
         self.neighborDirty = self.neighborDirty or {}
         self.neighborDirty[nb.id] = true
       end

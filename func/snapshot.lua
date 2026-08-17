@@ -9,7 +9,7 @@ local Snapshot = {}
 local SNAPSHOT_FIELDS = {
   "blocks", "warps", "objects", "signs",
   "borderBlock", "width", "height", "name",
-  "textDefs", "connections",
+  "textDefs", "connections", "connectionsExtra",
 }
 
 function Snapshot.capture(def)

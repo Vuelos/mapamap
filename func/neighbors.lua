@@ -8,6 +8,8 @@
 -- same set the runtime keeps resident around the current map.
 
 local Neighbors = {}
+local Common = require("mods.mapamap.func.common")
+local DIRS = Common.DIRS
 
 local CELL_PX = 16
 local BLOCK_PX = 32
@@ -19,7 +21,10 @@ local DEFAULT_HOPS = 2
 -- Walks the connection graph `hops` connections out from rootId, composing
 -- the strip offsets (north/south offsets are horizontal shifts in blocks,
 -- west/east offsets vertical), deduped by map id (BFS, so a direct
--- connection always wins over a two-hop path).  Returns
+-- connection always wins over a two-hop path).  Traverses the full
+-- connection union per side (the engine primary plus the editor-only extras
+-- in `connectionsExtra`), so every map the grid laid out shows up here at its
+-- real offset.  Returns
 --   { { id = mapId, ox = worldX, oy = worldY, def = mapDef }, ... }
 -- with offsets in world pixels relative to the root map's top-left corner
 -- and def the connected map's live data record (same table the game uses,
@@ -35,26 +40,28 @@ function Neighbors.compute(maps, rootId, hops)
   while queue[qi] do
     local cur = queue[qi]
     qi = qi + 1
-    for dir, conn in pairs(cur.def.connections or {}) do
-      local destDef = maps[conn.map]
-      if destDef and not placed[conn.map] then
-        placed[conn.map] = true
-        local ox, oy
-        if dir == "north" then
-          ox, oy = conn.offset * BLOCK_PX, -destDef.height * BLOCK_PX
-        elseif dir == "south" then
-          ox, oy = conn.offset * BLOCK_PX, cur.def.height * BLOCK_PX
-        elseif dir == "west" then
-          ox, oy = -destDef.width * BLOCK_PX, conn.offset * BLOCK_PX
-        else
-          ox, oy = cur.def.width * BLOCK_PX, conn.offset * BLOCK_PX
-        end
-        ox, oy = cur.ox + ox, cur.oy + oy
-        if cur.hops + 1 <= hops then
-          table.insert(out, { id = conn.map, ox = ox, oy = oy, def = destDef })
-          if cur.hops + 1 < hops then
-            table.insert(queue, { def = destDef, ox = ox, oy = oy,
-                                  hops = cur.hops + 1 })
+    for _, dir in ipairs(DIRS) do
+      for _, conn in ipairs(Common.connectionsOn(cur.def, dir)) do
+        local destDef = maps[conn.map]
+        if destDef and not placed[conn.map] then
+          placed[conn.map] = true
+          local ox, oy
+          if dir == "north" then
+            ox, oy = conn.offset * BLOCK_PX, -destDef.height * BLOCK_PX
+          elseif dir == "south" then
+            ox, oy = conn.offset * BLOCK_PX, cur.def.height * BLOCK_PX
+          elseif dir == "west" then
+            ox, oy = -destDef.width * BLOCK_PX, conn.offset * BLOCK_PX
+          else
+            ox, oy = cur.def.width * BLOCK_PX, conn.offset * BLOCK_PX
+          end
+          ox, oy = cur.ox + ox, cur.oy + oy
+          if cur.hops + 1 <= hops then
+            table.insert(out, { id = conn.map, ox = ox, oy = oy, def = destDef })
+            if cur.hops + 1 < hops then
+              table.insert(queue, { def = destDef, ox = ox, oy = oy,
+                                    hops = cur.hops + 1 })
+            end
           end
         end
       end

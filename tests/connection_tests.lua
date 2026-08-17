@@ -24,27 +24,58 @@ local mod = {
 }
 local game = { data = data, overworld = nil }
 
-local BACK = { north = "south", south = "north", east = "west", west = "east" }
-
 local function conn(def, dir)
   return (def.connections or {})[dir]
 end
 
--- Every reciprocal connection must mirror its forward offset.
+-- Every connection on `def` (primary + extras) must mirror back on the far
+-- map, with a negated offset (and the same size span).
 local function assertReciprocal(def, rootId, where)
-  for dir, c in pairs(def.connections or {}) do
-    local other = data.maps and data.maps[c.map]
-    local back = BACK[dir]
-    assert(other, where .. ": " .. def.id .. " -> " .. c.map .. " missing def")
-    assert(back, where .. ": bad dir " .. tostring(dir))
-    local r = conn(other, back)
-    assert(r, where .. ": " .. def.id .. "->" .. c.map
-      .. " missing reciprocal " .. tostring(back))
-    assert(r.map == def.id, where .. ": reciprocal back-points " .. r.map
-      .. " not " .. def.id)
-    assert(r.offset == -(c.offset or 0), where .. ": offset mismatch "
-      .. (r.offset or 0) .. " vs " .. (-(c.offset or 0)))
+  for _, dir in ipairs(Common.DIRS) do
+    for _, c in ipairs(Common.connectionsOn(def, dir)) do
+      local other = data.maps and data.maps[c.map]
+      local back = Common.RECIP[dir]
+      assert(other, where .. ": " .. def.id .. " -> " .. c.map .. " missing def")
+      assert(back, where .. ": bad dir " .. tostring(dir))
+      local r
+      for _, rc in ipairs(Common.connectionsOn(other, back)) do
+        if rc.map == def.id then r = rc break end
+      end
+      assert(r, where .. ": " .. def.id .. "->" .. c.map
+        .. " missing reciprocal " .. tostring(back))
+      assert(r.map == def.id, where .. ": reciprocal back-points " .. r.map
+        .. " not " .. def.id)
+      assert(r.offset == -(c.offset or 0), where .. ": offset mismatch "
+        .. (r.offset or 0) .. " vs " .. (-(c.offset or 0)))
+      assert((r.size or 0) == (c.size or 0), where .. ": size mismatch on "
+        .. def.id .. "->" .. c.map)
+    end
   end
+end
+
+function test_connectionsOnFlattensMergedArraySide()
+  local def = {
+    connections = {
+      west = {
+        { map = "B", offset = 8, size = 4 },
+        { map = "A", offset = 0, size = 4 },
+      },
+    },
+  }
+
+  local list = Common.connectionsOn(def, "west")
+  assert(#list == 2, "merged west side should flatten into two connections, got " .. #list)
+  assert(list[1].map == "A" and list[2].map == "B",
+    "flattened west list must be ordered by seam offset so the correct extra is first")
+
+  local withPrimary = {
+    connections = { west = { map = "B", offset = 8, size = 4 } },
+    connectionsExtra = { west = { { map = "A", offset = 0, size = 4 } } },
+  }
+  local merged = Common.connectionsOn(withPrimary, "west")
+  assert(#merged == 2, "primary + extra west side should flatten to two entries, got " .. #merged)
+  assert(merged[1].map == "A" and merged[2].map == "B",
+    "west-side flattening must order the seam by offset so the active extra connection comes first")
 end
 
 -- Deep-snapshots the connection graph of every map reachable from Pallet, so a
@@ -73,11 +104,15 @@ end
 local PRistine = captureGraph()
 
 -- Restores the pristine connection graph and removes every grid-created _EXT
--- map, so each test starts from the real Pallet data.
+-- map, so each test starts from the real Pallet data.  Also drops any
+-- connectionsExtra a prior test stacked onto the shared maps.
 local function restoreGraph()
   for id, conns in pairs(PRistine) do
     local def = data.maps[id]
-    if def then def.connections = Common.deepCopy(conns) end
+    if def then
+      def.connections = Common.deepCopy(conns)
+      def.connectionsExtra = nil
+    end
   end
   local created = {}
   for id in pairs(data.maps) do

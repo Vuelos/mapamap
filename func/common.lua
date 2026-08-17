@@ -30,4 +30,19 @@ function Common.tablesEqual(a, b)
   return ka == kb
 end
 
+Common.DIRS = { "north", "south", "west", "east" }
+Common.RECIP = { north = "south", south = "north", west = "east", east = "west" }
+
+Common.connectionsOn = function(def, dir)
+  return require("mods.mapamap.func.connections").connectionsOn(def, dir)
+end
+
+Common.connectionList = function(value)
+  return require("mods.mapamap.func.connections").connectionList(value)
+end
+
+Common.addConnection = function(def, otherDef, dir, offset, span)
+  return require("mods.mapamap.func.connections").addConnection(def, otherDef, dir, offset, span)
+end
+
 return Common

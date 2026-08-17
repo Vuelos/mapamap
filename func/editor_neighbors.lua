@@ -59,10 +59,12 @@ function EditorNeighbors.snapshotRecipConnections(self)
   if self.data and self.data.maps then
     for otherId, otherDef in pairs(self.data.maps) do
       if otherId ~= self.mapId then
-        for _, conn in pairs(otherDef.connections or {}) do
-          if conn.map == self.mapId then
-            out[otherId] = Common.deepCopy(otherDef.connections)
-            break
+        for _, dir in ipairs(Common.DIRS) do
+          for _, conn in ipairs(Common.connectionsOn(otherDef, dir)) do
+            if conn.map == self.mapId then
+              out[otherId] = Common.deepCopy(otherDef.connections)
+              break
+            end
           end
         end
       end
