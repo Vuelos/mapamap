@@ -17,6 +17,7 @@ local Overlay = require("mods.mapamap.components.overlay")
 local Save = require("mods.mapamap.func.save")
 local Snapshot = require("mods.mapamap.func.snapshot")
 local Common = require("mods.mapamap.func.common")
+local Connections = require("mods.mapamap.func.connections")
 local NewMap = require("mods.mapamap.func.new_map")
 local MapGrid = require("mods.mapamap.func.map_grid")
 local Hotbar = require("mods.mapamap.components.hotbar")
@@ -27,21 +28,88 @@ local session = nil
 -- Walks the game state stack and save data to find the current overworld
 -- map ID (same logic as map_editor).
 local function currentMapId(game)
+  if not game then return nil end
+
+  if game.overworld and game.overworld.map and game.overworld.map.id then
+    return game.overworld.map.id
+  end
+
+  if game.state and game.state.map and game.state.map.id then
+    return game.state.map.id
+  end
+
   local stack = game.stack
   if stack then
     local states = stack.states
     if states then
       for i = #states, 1, -1 do
         local s = states[i]
-        if s.isOverworld and s.map and s.map.id then
+        if s and s.isOverworld and s.map and s.map.id then
           return s.map.id
         end
       end
     end
   end
+
+  if game.map and game.map.id then return game.map.id end
+
   local save = game.save
-  if save and save.player and save.player.map then return save.player.map end
+  if save and save.player then
+    if save.player.map then return save.player.map end
+    if save.player.currentMap then return save.player.currentMap end
+  end
+
   return nil
+end
+
+-- Merges connectionsExtra into connections so the engine can use extra
+-- connections during neighbor computation. Extra connections are stored in
+-- connectionsExtra[dir] as an array; this function makes them visible to the
+-- engine by merging them with the primary connection in connections[dir].
+local function mergeExtraConnections(mod, data)
+  if not data or not data.maps then return end
+  for mapId, def in pairs(data.maps) do
+    if def.connectionsExtra then
+      if not def.connections then def.connections = {} end
+      for dir, extras in pairs(def.connectionsExtra) do
+        if extras and #extras > 0 then
+          local merged = {}
+          local primary = def.connections[dir]
+          if primary then
+            for _, conn in ipairs(Connections.connectionList(primary)) do
+              merged[#merged + 1] = conn
+            end
+          end
+          for i = 1, #extras do
+            merged[#merged + 1] = extras[i]
+          end
+          table.sort(merged, function(a, b)
+            local ao = a and a.offset or 0
+            local bo = b and b.offset or 0
+            if ao == bo then
+              local am = a and a.map or ""
+              local bm = b and b.map or ""
+              return am < bm
+            end
+            return ao < bo
+          end)
+          if #merged == 1 then
+            def.connections[dir] = merged[1]
+          elseif #merged > 1 then
+            def.connections[dir] = merged
+          end
+          local entries = {}
+          for _, conn in ipairs(merged) do
+            entries[#entries + 1] = string.format("%s@%s", tostring(conn.map), tostring(conn.offset or 0))
+          end
+          mod.log:info("mapamap debug: merged %d extra connection(s) on %s.%s -> %s",
+            #extras, mapId, dir, table.concat(entries, ", "))
+          mod.log:info("mapamap: merged %d extra connection(s) on %s.%s",
+            #extras, mapId, dir)
+        end
+      end
+    end
+  end
 end
 
 -- Persists every map edited during this session (primary + neighbors + new
@@ -99,6 +167,12 @@ end
 
 -- Applies persisted patches for the session map to live data, then builds a
 -- session on it.  Returns the session or nil.
+local function ensureConnectedMaps(s)
+  if not s then return 0 end
+  local created = MapGrid.autofill(s, MapGrid.DEFAULT_DEPTH)
+  return created or 0
+end
+
 local function openSession(mod, game)
   local mapId = currentMapId(game)
   if not mapId then
@@ -111,10 +185,12 @@ local function openSession(mod, game)
     return nil
   end
   s:applySavedPatches()
-  -- Grid expansion runs on load (F6 open and every border cross): close every
-  -- open void within one hop so the world around the loaded map is fully tiled
-  -- before editing starts.  Painting never creates maps.
-  MapGrid.autofill(s, MapGrid.DEFAULT_DEPTH)
+  -- Merge extra connections into primary connections so the engine can use them
+  mergeExtraConnections(mod, s.data)
+  -- Grid expansion runs on both the initial open and every map-entry: the
+  -- session must always have a connected ring around it before edits/draws use
+  -- the live map graph.
+  ensureConnectedMaps(s)
   -- Hotbar: restore a saved layout, else seed with the first few blocks.
   local saved = mod.save:get("mapamap_hotbar", nil)
   if saved and type(saved) == "table" and #saved > 0 then
@@ -164,9 +240,10 @@ local function reconcileSession(mod, game)
   local s = Session.new(mod, game, mapId)
   if not s then return end
   s:applySavedPatches()
-  MapGrid.autofill(s, MapGrid.DEFAULT_DEPTH)
   session = s
-  -- Re-point picker/hotbar onto the incoming map's tileset.
+  -- Re-point picker/hotbar onto the incoming map's tileset and grow the
+  -- connected map ring on entry so the new map always has neighbors to paint on.
+  ensureConnectedMaps(session)
   Input.onMapEntry(session)
   Input.applySelection(session)
 end
@@ -204,7 +281,7 @@ local function createAdjacentMap(mod, game, side)
   session:storeOriginal()
 end
 
-return function(mod)
+local function run(mod)
 
   -- render.hud: draw the overlay on top of the finished frame while active.
   -- Hooks run as (next, game, viewport); draw our overlay and continue the
@@ -236,7 +313,10 @@ return function(mod)
       else
         if key == "f6" then
           session = openSession(mod, self)
-          if session then active = true; Input.reset() end
+          if session then
+            active = true
+            Input.reset()
+          end
           return
         end
       end
@@ -295,10 +375,12 @@ return function(mod)
         if not Data.maps[id] then Data.maps[id] = def end
       end
     end
+    -- Merge extra connections into primary connections so the engine can use them
+    local Data = require("src.core.Data")
+    mergeExtraConnections(mod, Data)
     -- Any replayed patch may reference grafted foreign blocks -- grow every
     -- touched tileset's atlas from the live defs before maps rebuild, so a
     -- patched map renders its imports instead of drawing blank cells.
-    local Data = require("src.core.Data")
     local Graft = require("mods.mapamap.func.graft")
     Graft.materializeAll(Data)
     local MapLoader = require("src.world.MapLoader")
@@ -307,3 +389,9 @@ return function(mod)
 
   mod.log:info("mapamap loaded — F6 to paint directly on the overworld")
 end
+
+local Main = function(mod)
+  return run(mod)
+end
+
+return Main
