@@ -22,10 +22,12 @@ local Item = {}
 -- nothing could be drawn.  `tileset`, when supplied, is a renderer bundle
 -- { image, quads, aliasMap, blocks } for the tileset whose blocks this item
 -- belongs to -- so the picker can thumbnail a non-current tileset's blocks from
--- its own atlas instead of always the live map's tileset.
-function Item.draw(session, item, x, y, boxSize, tileset)
+-- its own atlas instead of always the live map's tileset.  `alpha` (0..1)
+-- fades the whole thumbnail (used for drag ghosts).
+function Item.draw(session, item, x, y, boxSize, tileset, alpha)
   if not item then return false end
   local r = session.map and session.map.renderer
+  local A = alpha or 1
 
   if item.kind == "blueprint" then
     local bp = item
@@ -38,7 +40,7 @@ function Item.draw(session, item, x, y, boxSize, tileset)
     local ox = x + math.floor((boxSize - bp.w * thumbCell) / 2)
     local oy = y + math.floor((boxSize - bp.h * thumbCell) / 2)
     local scale = thumbCell / Common.BLOCK_PX
-    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(1, 1, 1, A)
     for row = 0, bp.h - 1 do
       for col = 0, bp.w - 1 do
         local tileCell = bp.tiles[row * bp.w + col + 1]
@@ -92,7 +94,7 @@ function Item.draw(session, item, x, y, boxSize, tileset)
     local block = blocksTable and blocksTable[item.id + 1]
     if not block then return false end
     local scale = boxSize / Common.BLOCK_PX
-    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(1, 1, 1, A)
     love.graphics.push()
     love.graphics.scale(scale, scale)
     for rr = 0, 3 do
@@ -123,12 +125,12 @@ function Item.draw(session, item, x, y, boxSize, tileset)
     end
     local sr = session._spriteRenderers[item.id]
     if not sr then
-      love.graphics.setColor(0.8, 0.3, 0.2, 0.7)
+      love.graphics.setColor(0.8, 0.3, 0.2, 0.7 * A)
       love.graphics.rectangle("fill", x, y, boxSize, boxSize)
-      love.graphics.setColor(1, 1, 1, 1)
+      love.graphics.setColor(1, 1, 1, A)
       return true
     end
-    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(1, 1, 1, A)
     -- Full size x2: a sprite frame is 16x16, so render it at the box size
     -- (the old code fit it into a 32px box, showing sprites at half scale).
     local scale = boxSize / 16
@@ -146,20 +148,20 @@ function Item.draw(session, item, x, y, boxSize, tileset)
     -- the entity-marker style used in the world overlay (blue = warp).  The
     -- "new warp" template cell draws a green plus so it reads as a builder.
     if item.newWarp then
-      love.graphics.setColor(0.2, 0.8, 0.35, 0.7)
+      love.graphics.setColor(0.2, 0.8, 0.35, 0.7 * A)
       love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      love.graphics.setColor(1, 1, 1, 0.9)
+      love.graphics.setColor(1, 1, 1, 0.9 * A)
       love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
         x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
       love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
         x + boxSize / 2, y + boxSize / 2 + boxSize / 6)
     else
-      love.graphics.setColor(0.2, 0.6, 1, 0.7)
+      love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
       love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      love.graphics.setColor(1, 1, 1, 0.85)
+      love.graphics.setColor(1, 1, 1, 0.85 * A)
       love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
     end
-    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(1, 1, 1, A)
     if session.font and item.newWarp then
       session.font.draw("NEW", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
     elseif session.font and item.destMap then
@@ -173,9 +175,9 @@ function Item.draw(session, item, x, y, boxSize, tileset)
     -- map objects reuse the sprite/item thumbnail so the cell shows exactly
     -- what placing it copies, else a green disc with the object's name.
     if item.newObject then
-      love.graphics.setColor(0.2, 0.8, 0.35, 0.7)
+      love.graphics.setColor(0.2, 0.8, 0.35, 0.7 * A)
       love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      love.graphics.setColor(1, 1, 1, 0.9)
+      love.graphics.setColor(1, 1, 1, 0.9 * A)
       love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
         x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
       love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
@@ -187,11 +189,11 @@ function Item.draw(session, item, x, y, boxSize, tileset)
     end
     local o = item.obj
     if o and o.sprite and session.data and session.data.sprites[o.sprite] then
-      return Item.draw(session, { kind = "sprite", id = o.sprite }, x, y, boxSize)
+      return Item.draw(session, { kind = "sprite", id = o.sprite }, x, y, boxSize, nil, A)
     end
-    love.graphics.setColor(0.35, 0.8, 0.4, 0.65)
+    love.graphics.setColor(0.35, 0.8, 0.4, 0.65 * A)
     love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-    love.graphics.setColor(1, 1, 1, 0.85)
+    love.graphics.setColor(1, 1, 1, 0.85 * A)
     love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
     if session.font and item.name then
       session.font.draw(item.name, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
@@ -205,11 +207,11 @@ function Item.draw(session, item, x, y, boxSize, tileset)
     local idef = session.data and session.data.items and session.data.items[item.id]
     local sprite = idef and idef.sprite
     if sprite then
-      return Item.draw(session, { kind = "sprite", id = sprite }, x, y, boxSize)
+      return Item.draw(session, { kind = "sprite", id = sprite }, x, y, boxSize, nil, A)
     end
-    love.graphics.setColor(0.35, 0.6, 1, 0.5)
+    love.graphics.setColor(0.35, 0.6, 1, 0.5 * A)
     love.graphics.rectangle("fill", x, y, boxSize, boxSize)
-    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(1, 1, 1, A)
     if session.font then
       session.font.draw(item.id, x + 2, y + 2)
     end

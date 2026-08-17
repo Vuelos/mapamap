@@ -37,6 +37,7 @@ function State.reset(ui, brush)
   brush.lastCellY = nil
   ui.mouseButtons = { [1] = false, [2] = false, [3] = false }
   ui.dragItem = nil
+  ui.dragFromSlot = nil
   ui.pickerTilesetScroll = 1
   ui.pickerDropOpen = false
   ui.blueprintMode = false
@@ -50,6 +51,7 @@ function State.reset(ui, brush)
   ui.inventory.tab = 1
   ui.inventory.scroll = 1
   ui.showInventory = true
+  ui.showMapBorders = false
   ui._needsGraftRebuild = false
 end
 

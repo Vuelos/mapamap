@@ -101,12 +101,41 @@ local brush = {
 -- armed forever.  Every move reconciles the flags against the physical mouse,
 -- so letting the button up always ends the drag even if its event never
 -- arrives.  No-op when love.mouse.isDown is unavailable (headless harnesses).
+local function finishDragDrop(mx, my)
+  if not Input.dragItem then return false end
+  local vw, vh = love.graphics.getDimensions()
+  local slot = Hotbar.at(vw, vh, mx, my)
+  local fromSlot = Input.dragFromSlot
+  if slot then
+    if fromSlot and fromSlot ~= slot then
+      Input.hotbar[fromSlot], Input.hotbar[slot] =
+        Input.hotbar[slot], Input.hotbar[fromSlot]
+      Input.selected = slot
+    elseif not fromSlot then
+      Input.hotbar[slot] = Input.dragItem
+      Input.selected = slot
+    end
+    Input.applySelection(session)
+  elseif Input.showInventory and Inventory.over(vw, vh, mx, my) then
+    Input.addInventory(Input.dragItem)
+  end
+  Input.dragItem = nil
+  Input.dragFromSlot = nil
+  return true
+end
+
 local function reconcileMouseHeld()
   local isDown = love.mouse.isDown
   if not isDown then return end
   if Input.mouseButtons[1] and not isDown(1) then
     Input.mouseButtons[1] = false
     brush.painting = false
+    if Input.dragItem then
+      -- A physical release outside the UI can happen without the release event
+      -- reaching us: settle the drag right here so it cannot remain stranded.
+      local mx, my = love.mouse.getPosition()
+      finishDragDrop(mx, my)
+    end
   end
   if Input.mouseButtons[2] and not isDown(2) then
     Input.mouseButtons[2] = false
@@ -134,6 +163,7 @@ function Input.cancelled()
   brush.erasing = false
   brush.draggingWarp = false
   Input.dragItem = nil
+  Input.dragFromSlot = nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -272,7 +302,7 @@ function Input.mousepressed(session, game, mx, my, button)
       return true
     end
     if button == 1 then
-      local tabIdx = Inventory.tabAt(vw, vh, mx, my)
+      local tabIdx = Inventory.tabAt(vw, vh, mx, my, session.font)
       if tabIdx then
         Input.inventory.tab = tabIdx
         Input.inventory.scroll = 1
@@ -291,11 +321,16 @@ function Input.mousepressed(session, game, mx, my, button)
       return true
     end
   end
-  -- Hotbar selection.
+  -- Hotbar selection.  An LMB press on a filled slot also arms a drag so the
+  -- item can be swapped onto another slot or dropped into the inventory.
   local slot = Hotbar.at(vw, vh, mx, my)
   if slot then
     Input.selected = slot
     Input.applySelection(session)
+    if button == 1 and Input.hotbar[slot] then
+      Input.dragItem = Input.hotbar[slot]
+      Input.dragFromSlot = slot
+    end
     return true
   end
   -- World paint / erase.
@@ -377,15 +412,26 @@ function Input.mousereleased(session, mx, my, button)
   if button == 1 and Input.dragItem then
     local vw, vh = love.graphics.getDimensions()
     local slot = Hotbar.at(vw, vh, mx, my)
+    local fromSlot = Input.dragFromSlot
     if slot then
-      Input.hotbar[slot] = Input.dragItem
-      Input.selected = slot
+      if fromSlot and fromSlot ~= slot then
+        -- Hotbar-to-hotbar: swap the two slots so nothing is lost.
+        Input.hotbar[fromSlot], Input.hotbar[slot] =
+          Input.hotbar[slot], Input.hotbar[fromSlot]
+        Input.selected = slot
+      elseif not fromSlot then
+        -- A dragged picker/blueprint entry dropped on the hotbar takes the slot.
+        Input.hotbar[slot] = Input.dragItem
+        Input.selected = slot
+      end
+      Input.applySelection(session)
     elseif Input.showInventory and Inventory.over(vw, vh, mx, my) then
-      -- A dragged picker/blueprint entry dropped on the inventory lands in
-      -- the user's collection.
+      -- A dragged hotbar/picker entry dropped on the inventory lands in the
+      -- user's collection (the hotbar copy stays).
       Input.addInventory(Input.dragItem)
     end
     Input.dragItem = nil
+    Input.dragFromSlot = nil
     return true
   end
   if button == 2 and brush.draggingWarp then
@@ -505,6 +551,9 @@ function Input.keypressed(session, key)
     Input.blueprintMode = not Input.blueprintMode
     Input.selectStart, Input.selectEnd = nil, nil
     Input._bpMoved = false
+    return true
+  elseif key == "o" then
+    Input.showMapBorders = not Input.showMapBorders
     return true
   elseif key == "p" or key == "q" then
     -- Pick the block under the mouse into the selected slot.

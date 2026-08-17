@@ -22,6 +22,8 @@ Inventory.PAD = 8
 Inventory.SLOT = 40          -- square cell size (a bit smaller than the hotbar)
 Inventory.GAP = 6
 Inventory.TAB_H = 24         -- category tab row height (scaled text fits)
+Inventory.TAB_GAP = 4        -- spacing between the per-text tab buttons
+Inventory.TAB_PAD_X = 1      -- button padding around the scaled label
 Inventory.COLS = 10          -- fixed column count for the item grid
 Inventory.SIDE_GAP = 10      -- gap between the inventory and the side panel
 
@@ -85,20 +87,33 @@ function Inventory.perPage(vw, vh)
   return Inventory.COLS * Inventory.rows(vh)
 end
 
--- Bounding rect of a tab button.
-function Inventory.tabRect(vw, vh, i)
+-- Scaled (2x) width of a tab label in screen units, matching Text.label's
+-- width math so the button hugs the drawn chip (fonts without a `width`
+-- method fall back to the same #glyphs * 8 estimate).
+function Inventory.labelWidth(font, label)
+  local glyphW = (font and font.width and font.width(label)) or (#tostring(label) * 8)
+  return glyphW * 2
+end
+
+-- Bounding rect of a tab button: each button is sized to its label's text
+-- width (plus padding), and the buttons sit side by side with a small gap.
+function Inventory.tabRect(vw, vh, i, font)
   if i < 1 or i > #Inventory.TABS then return nil end
-  local px, py, pw, _ = Inventory.rect(vw, vh)
-  local n = #Inventory.TABS
-  local tw = (pw - Inventory.PAD * 2 - (n - 1) * Inventory.GAP) / n
-  local x = px + Inventory.PAD + (i - 1) * (tw + Inventory.GAP)
-  return x, py + Inventory.PAD, tw, Inventory.TAB_H
+  local px, py, _, _ = Inventory.rect(vw, vh)
+  local x = px + Inventory.PAD
+  for j = 1, i - 1 do
+    x = x + Inventory.labelWidth(font, Inventory.TABS[j].label)
+          + Inventory.TAB_PAD_X * 2 + Inventory.TAB_GAP
+  end
+  local w = Inventory.labelWidth(font, Inventory.TABS[i].label)
+            + Inventory.TAB_PAD_X * 2
+  return x, py + Inventory.PAD, w, Inventory.TAB_H
 end
 
 -- Which tab button (1..n) a screen point is over, or nil.
-function Inventory.tabAt(vw, vh, mx, my)
+function Inventory.tabAt(vw, vh, mx, my, font)
   for i = 1, #Inventory.TABS do
-    local x, y, w, h = Inventory.tabRect(vw, vh, i)
+    local x, y, w, h = Inventory.tabRect(vw, vh, i, font)
     if mx >= x and mx < x + w and my >= y and my < y + h then return i end
   end
   return nil
@@ -138,9 +153,31 @@ end
 
 -- The panel's display list for the active tab. Inventory is only the saved
 -- collection; live current-map content is owned by separate components.
+-- For Objects and Warps tabs, templates are always shown first.
 function Inventory.tabList(session, state)
   local tab = (state and state.tab) or 1
-  return Inventory.listFor(state and state.items, tab)
+  local items = state and state.items
+  local list = Inventory.listFor(items, tab)
+  
+  -- For Objects tab (2) and Warps tab (3), sort to show templates first
+  if tab == 2 or tab == 3 then
+    local templates = {}
+    local others = {}
+    for _, item in ipairs(list) do
+      if (tab == 2 and item.newObject) or (tab == 3 and item.newWarp) then
+        table.insert(templates, item)
+      else
+        table.insert(others, item)
+      end
+    end
+    -- Return templates first, then other items
+    for _, item in ipairs(others) do
+      table.insert(templates, item)
+    end
+    return templates
+  end
+  
+  return list
 end
 
 -- Adds an item to the inventory, switching to its tab and scrolling so the
@@ -180,7 +217,7 @@ function Inventory.draw(session, state, vw, vh, font, selectedItem)
   -- Tab row: single light chip per tab (no dark button rectangle behind it);
   -- the active tab gets a blue outline so the selected category still reads.
   local mx, my = love.mouse.getPosition()
-  local hoverTab = Inventory.tabAt(vw, vh, mx, my)
+  local hoverTab = Inventory.tabAt(vw, vh, mx, my, font)
   for i = 1, #Inventory.TABS do
     local x, y, w, h = Inventory.tabRect(vw, vh, i)
     Text.label(font, Inventory.TABS[i].label, x + 4, y + 3, 2, {

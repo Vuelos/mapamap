@@ -20,6 +20,8 @@
 
 local Coords = require("mods.mapamap.func.coords")
 local Input = require("mods.mapamap.input")
+local Neighbors = require("mods.mapamap.func.neighbors")
+local Borders = require("mods.mapamap.func.overlay")
 local Item = require("mods.mapamap.components.item")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Picker = require("mods.mapamap.components.picker")
@@ -34,6 +36,11 @@ local function drawCursor(session, game)
   local t = Coords.transform(game)
   if not t then return end
   local item = Input.selectedItem()
+  if item and item.kind == "blueprint" then
+    -- The blueprint preview (with its footprint outline) replaces the plain
+    -- cursor highlight while a stamp is selected.
+    return
+  end
   local x, y, w, h
   if item and (item.kind == "sprite" or item.kind == "item"
        or item.kind == "warp" or item.kind == "object") then
@@ -110,6 +117,87 @@ local function drawSelection(session, game)
   love.graphics.setColor(0.3, 1, 0.5, 0.8)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", lx, ly, w, h)
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
+-- --- blueprint placement preview -------------------------------------------
+
+-- Draws one blueprint cell as its tile block (4x4 atlas tiles) at the screen
+-- block rect, faded.  Falls back to a translucent neutral square when the tile
+-- cannot be resolved.  Returns true when something was drawn.
+local function drawPreviewBlock(session, bid, srcTs, x, y, sx, sy)
+  local r = session.map and session.map.renderer
+  if not r or not r.image then return false end
+  local image, quads, aliasMap, block
+  local bundle
+  if srcTs and session.tileset and srcTs ~= session.tileset.id then
+    local tsDef = session.data and session.data.tilesets and session.data.tilesets[srcTs]
+    if tsDef and session.thumbnailBundle then bundle = session:thumbnailBundle(tsDef) end
+  end
+  if bundle then
+    image, quads, aliasMap = bundle.image, bundle.quads, bundle.aliasMap
+    block = bundle.blocks and bundle.blocks[bid + 1]
+  else
+    image, quads, aliasMap = r.image, r.quads, r.aliasMap
+    block = session.tileset and session.tileset.blocks and session.tileset.blocks[bid + 1]
+  end
+  if not image or not quads or not block then return false end
+  love.graphics.push()
+  love.graphics.scale(sx, sy)
+  love.graphics.setColor(1, 1, 1, 0.55)
+  for rr = 0, 3 do
+    for cc = 0, 3 do
+      local ci = rr * 4 + cc + 1
+      local tile = block[ci]
+      local remap = aliasMap and aliasMap[bid]
+      if remap and remap[ci - 1] then tile = remap[ci - 1] end
+      local quad = quads[tile]
+      if quad then love.graphics.draw(image, quad, x / sx + cc * 8, y / sy + rr * 8) end
+    end
+  end
+  love.graphics.pop()
+  return true
+end
+
+-- While a blueprint is selected, draw a translucent ghost of the stamp on the
+-- world at the cursor block, exactly where the next LMB would place it (same
+-- anchor math as Blueprints.paint), with a green footprint outline.  Cells
+-- over open void are skipped -- they paint nothing.
+local function drawBlueprintPreview(session, game)
+  local item = Input.selectedItem()
+  if not item or item.kind ~= "blueprint" then return end
+  local t = Coords.transform(game)
+  if not t then return end
+  local bp = item
+  local bx0 = math.floor(session.cursorBx / 2)
+  local by0 = math.floor(session.cursorBy / 2)
+  for row = 0, bp.h - 1 do
+    for col = 0, bp.w - 1 do
+      local cell = bp.tiles[row * bp.w + col + 1]
+      if cell ~= nil and cell ~= false then
+        local bid = type(cell) == "table" and cell.id or cell
+        local srcTs = type(cell) == "table" and cell.tileset or nil
+        local _, def = Neighbors.mapAt(session.def, session.neighbors,
+          (bx0 + col) * 2, (by0 + row) * 2)
+        if def then
+          local x, y, w, h = Coords.blockRect(t, (bx0 + col) * 2, (by0 + row) * 2)
+          if x and not drawPreviewBlock(session, bid, srcTs, x, y, t.sx, t.sy) then
+            love.graphics.setColor(1, 1, 1, 0.3)
+            love.graphics.rectangle("fill", x, y, w, h)
+          end
+        end
+      end
+    end
+  end
+  -- Green footprint outline over the whole anchored stamp.
+  local lx, ly, _, _ = Coords.blockRect(t, bx0 * 2, by0 * 2)
+  if lx then
+    local w = bp.w * 32 * t.sx
+    local h = bp.h * 32 * t.sy
+    love.graphics.setColor(0.3, 1, 0.5, 0.85)
+    love.graphics.setLineWidth(1)
+    love.graphics.rectangle("line", lx, ly, w, h)
+  end
   love.graphics.setColor(1, 1, 1, 1)
 end
 
@@ -211,7 +299,9 @@ function Overlay.draw(session, game, viewport)
   love.graphics.setColor(1, 1, 1, 1)
 
   -- World markers first so the HUD panels always render above them.
+  Borders.draw(session, game)
   drawCursor(session, game)
+  drawBlueprintPreview(session, game)
   drawSelection(session, game)
   drawWarps(session, game)
   drawDestPick(session, game)
@@ -232,6 +322,16 @@ function Overlay.draw(session, game, viewport)
   if Input.details then
     local Details = require("mods.mapamap.components.details")
     Details.draw(session, Input.details, vw, vh, session.font)
+  end
+
+  -- A picked-up item (picker or hotbar drag) floats under the cursor above
+  -- every panel, faded, so the drop target stays visible underneath.
+  if Input.dragItem then
+    local mx, my = love.mouse.getPosition()
+    local size = 40
+    love.graphics.setColor(0, 0, 0, 0.25)
+    love.graphics.rectangle("fill", mx - size / 2 + 3, my - size / 2 + 3, size, size)
+    Item.draw(session, Input.dragItem, mx - size / 2, my - size / 2, size, nil, 0.8)
   end
 
   love.graphics.pop()
