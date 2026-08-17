@@ -300,17 +300,21 @@ function MapOps.paintBlueprint(self, bp)
     for _, bpWarp in ipairs(bp.warps) do
       local cx = cursorCx0 + bpWarp.x
       local cy = cursorCy0 + bpWarp.y
-      local mapId, def = Neighbors.mapAt(self.def, self.neighbors, cx, cy)
-      if def and cx >= 0 and cy >= 0 and cx < def.width * 2 and cy < def.height * 2 then
-        def.warps = def.warps or {}
-        local newWarp = {}
-        for k, v in pairs(bpWarp) do newWarp[k] = v end
-        newWarp.x = cx
-        newWarp.y = cy
-        if self.undo then self.undo:capture(def) end
-        table.insert(def.warps, newWarp)
-        changed = true
-        if mapId ~= nil then self.neighborDirty[mapId] = true end
+      local mapId, def, ox, oy = Neighbors.mapAt(self.def, self.neighbors, cx, cy)
+      if def then
+        local localCx = cx - math.floor((ox or 0) / CELL_PX)
+        local localCy = cy - math.floor((oy or 0) / CELL_PX)
+        if localCx >= 0 and localCy >= 0 and localCx < def.width * 2 and localCy < def.height * 2 then
+          def.warps = def.warps or {}
+          local newWarp = {}
+          for k, v in pairs(bpWarp) do newWarp[k] = v end
+          newWarp.x = localCx
+          newWarp.y = localCy
+          if self.undo then self.undo:capture(def) end
+          table.insert(def.warps, newWarp)
+          changed = true
+          if mapId ~= nil then self.neighborDirty[mapId] = true end
+        end
       end
     end
   end
@@ -320,22 +324,26 @@ function MapOps.paintBlueprint(self, bp)
     for _, bpObject in ipairs(bp.objects) do
       local cx = cursorCx0 + bpObject.x
       local cy = cursorCy0 + bpObject.y
-      local mapId, def = Neighbors.mapAt(self.def, self.neighbors, cx, cy)
-      if def and cx >= 0 and cy >= 0 and cx < def.width * 2 and cy < def.height * 2 then
-        def.objects = def.objects or {}
-        local maxIndex = 0
-        for _, o in ipairs(def.objects) do
-          if (o.index or 0) > maxIndex then maxIndex = o.index end
+      local mapId, def, ox, oy = Neighbors.mapAt(self.def, self.neighbors, cx, cy)
+      if def then
+        local localCx = cx - math.floor((ox or 0) / CELL_PX)
+        local localCy = cy - math.floor((oy or 0) / CELL_PX)
+        if localCx >= 0 and localCy >= 0 and localCx < def.width * 2 and localCy < def.height * 2 then
+          def.objects = def.objects or {}
+          local maxIndex = 0
+          for _, o in ipairs(def.objects) do
+            if (o.index or 0) > maxIndex then maxIndex = o.index end
+          end
+          local newObject = {}
+          for k, v in pairs(bpObject) do newObject[k] = v end
+          newObject.x = localCx
+          newObject.y = localCy
+          newObject.index = maxIndex + 1
+          if self.undo then self.undo:capture(def) end
+          table.insert(def.objects, newObject)
+          changed = true
+          if mapId ~= nil then self.neighborDirty[mapId] = true end
         end
-        local newObject = {}
-        for k, v in pairs(bpObject) do newObject[k] = v end
-        newObject.x = cx
-        newObject.y = cy
-        newObject.index = maxIndex + 1
-        if self.undo then self.undo:capture(def) end
-        table.insert(def.objects, newObject)
-        changed = true
-        if mapId ~= nil then self.neighborDirty[mapId] = true end
       end
     end
   end

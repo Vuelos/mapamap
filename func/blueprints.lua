@@ -70,25 +70,41 @@ function Blueprints.capture(ui, session)
   local cellY1 = (y1 + 1) * 2 - 1
   
   local warps = {}
-  for _, w in ipairs(session.def.warps or {}) do
-    if w.x >= cellX0 and w.x <= cellX1 and w.y >= cellY0 and w.y <= cellY1 then
-      local copy = {}
-      for k, v in pairs(w) do copy[k] = v end
-      copy.x = w.x - cellX0
-      copy.y = w.y - cellY0
-      warps[#warps + 1] = copy
+  local function collectWarps(def, offX, offY)
+    for _, w in ipairs(def and def.warps or {}) do
+      local worldX = offX + w.x
+      local worldY = offY + w.y
+      if worldX >= cellX0 and worldX <= cellX1 and worldY >= cellY0 and worldY <= cellY1 then
+        local copy = {}
+        for k, v in pairs(w) do copy[k] = v end
+        copy.x = worldX - cellX0
+        copy.y = worldY - cellY0
+        warps[#warps + 1] = copy
+      end
     end
+  end
+  collectWarps(session.def, 0, 0)
+  for _, nb in ipairs(session.neighbors or {}) do
+    collectWarps(nb.def, math.floor(nb.ox / Common.CELL_PX), math.floor(nb.oy / Common.CELL_PX))
   end
   
   local objects = {}
-  for _, o in ipairs(session.def.objects or {}) do
-    if o.x >= cellX0 and o.x <= cellX1 and o.y >= cellY0 and o.y <= cellY1 then
-      local copy = {}
-      for k, v in pairs(o) do copy[k] = v end
-      copy.x = o.x - cellX0
-      copy.y = o.y - cellY0
-      objects[#objects + 1] = copy
+  local function collectObjects(def, offX, offY)
+    for _, o in ipairs(def and def.objects or {}) do
+      local worldX = offX + o.x
+      local worldY = offY + o.y
+      if worldX >= cellX0 and worldX <= cellX1 and worldY >= cellY0 and worldY <= cellY1 then
+        local copy = {}
+        for k, v in pairs(o) do copy[k] = v end
+        copy.x = worldX - cellX0
+        copy.y = worldY - cellY0
+        objects[#objects + 1] = copy
+      end
     end
+  end
+  collectObjects(session.def, 0, 0)
+  for _, nb in ipairs(session.neighbors or {}) do
+    collectObjects(nb.def, math.floor(nb.ox / Common.CELL_PX), math.floor(nb.oy / Common.CELL_PX))
   end
   
   local id = "blueprint_" .. os.time()
