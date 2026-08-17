@@ -35,7 +35,8 @@ local function visibleBlockAt(session, worldBx, worldBy)
 end
 
 -- Captures the block grid inside the current selection rectangle into the
--- blueprint book.  Returns the new blueprint id, or nil.
+-- blueprint book, along with any warps and objects within the area.
+-- Returns the new blueprint id, or nil.
 function Blueprints.capture(ui, session)
   local a, b = ui.selectStart, ui.selectEnd
   if not a or not b then return nil end
@@ -44,6 +45,8 @@ function Blueprints.capture(ui, session)
   local w = x1 - x0 + 1
   local h = y1 - y0 + 1
   if w <= 0 or h <= 0 or w * h > 4096 then return nil end
+  
+  -- Capture tiles
   local tiles = {}
   for by = y0, y1 do
     for bx = x0, x1 do
@@ -58,10 +61,43 @@ function Blueprints.capture(ui, session)
       end
     end
   end
+  
+  -- Capture warps and objects within the selection rectangle
+  -- Objects/warps are in walk-grid cells (not blocks), so multiply block coords by 2
+  local cellX0 = x0 * 2
+  local cellX1 = (x1 + 1) * 2 - 1
+  local cellY0 = y0 * 2
+  local cellY1 = (y1 + 1) * 2 - 1
+  
+  local warps = {}
+  for _, w in ipairs(session.def.warps or {}) do
+    if w.x >= cellX0 and w.x <= cellX1 and w.y >= cellY0 and w.y <= cellY1 then
+      local copy = {}
+      for k, v in pairs(w) do copy[k] = v end
+      copy.x = w.x - cellX0
+      copy.y = w.y - cellY0
+      warps[#warps + 1] = copy
+    end
+  end
+  
+  local objects = {}
+  for _, o in ipairs(session.def.objects or {}) do
+    if o.x >= cellX0 and o.x <= cellX1 and o.y >= cellY0 and o.y <= cellY1 then
+      local copy = {}
+      for k, v in pairs(o) do copy[k] = v end
+      copy.x = o.x - cellX0
+      copy.y = o.y - cellY0
+      objects[#objects + 1] = copy
+    end
+  end
+  
   local id = "blueprint_" .. os.time()
   -- Blueprints live in the inventory (its Blueprints tab is the only
   -- container), stored whole so the tab previews the captured grid.
-  Inventory.add(ui, { kind = "blueprint", id = id, w = w, h = h, tiles = tiles })
+  Inventory.add(ui, { 
+    kind = "blueprint", id = id, w = w, h = h, 
+    tiles = tiles, warps = warps, objects = objects 
+  })
   ui.selectStart, ui.selectEnd = nil, nil
   -- The capture is done: leave rectangle-select and show the inventory's
   -- Blueprints tab so the new blueprint is immediately visible.
@@ -71,7 +107,8 @@ function Blueprints.capture(ui, session)
 end
 
 -- Paints a blueprint at the given screen point's world block.  Cells can land
--- on any visible laid-out map; cells over open void are skipped.
+-- on any visible laid-out map; cells over open void trigger map creation when
+-- a flush host is available, otherwise they are skipped.
 function Blueprints.paint(ui, session, bid, mx, my)
   local bp = nil
   for _, e in ipairs(ui.inventory.items) do
@@ -83,6 +120,24 @@ function Blueprints.paint(ui, session, bid, mx, my)
   local tx, ty = Coords.toWorldCell(t, mx, my)
   session.cursorBx = tx - (tx % 2)
   session.cursorBy = ty - (ty % 2)
+  local bx0 = math.floor(session.cursorBx / 2)
+  local by0 = math.floor(session.cursorBy / 2)
+  -- When any stamp cell falls on void, try to create a map covering the
+  -- whole bounding rect before stamping.
+  local hasVoid = false
+  for row = 0, bp.h - 1 do
+    for col = 0, bp.w - 1 do
+      local wx = bx0 + col
+      local wy = by0 + row
+      local _, def = Neighbors.mapAt(session.def, session.neighbors,
+                                     wx * 2, wy * 2)
+      if not def then hasVoid = true; break end
+    end
+    if hasVoid then break end
+  end
+  if hasVoid then
+    session:createMapAtCursor(bx0, by0, bp.w, bp.h)
+  end
   -- Defer the stamp + renderer rebuild to MapOps.paintBlueprint, which also
   -- pushes an undo step so Ctrl+Z / Ctrl+Y move through blueprint stamps.
   return session:paintBlueprint(bp)
