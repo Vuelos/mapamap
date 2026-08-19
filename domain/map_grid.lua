@@ -21,10 +21,10 @@
 -- rejected outright.
 
 local MapGrid = {}
-local Neighbors = require("mods.mapamap.func.neighbors")
-local NewMap = require("mods.mapamap.func.new_map")
-local Common = require("mods.mapamap.func.common")
-local Connections = require("mods.mapamap.func.connections")
+local Neighbors = require("mods.mapamap.domain.neighbors")
+local NewMap = require("mods.mapamap.domain.new_map")
+local Common = require("mods.mapamap.common")
+local Connections = require("mods.mapamap.domain.connections")
 local BLOCK_PX = Common.BLOCK_PX
 local DIRS = Common.DIRS
 local RECIP = Common.RECIP
@@ -52,7 +52,7 @@ function MapGrid.layout(maps, rootId, hops)
     table.insert(out, cur)
     if cur.hop < (hops or MapGrid.DEFAULT_DEPTH) then
       for _, dir in ipairs(DIRS) do
-        for _, conn in ipairs(Common.connectionsOn(cur.def, dir)) do
+        for _, conn in ipairs(Connections.connectionsOn(cur.def, dir)) do
           local destDef = maps[conn.map]
           if destDef and not placed[conn.map] then
             placed[conn.map] = true
@@ -197,7 +197,7 @@ function MapGrid.contactAccepts(byId, def, recip, bx, by, w, h)
   local vs, vw = MapGrid.edgeCoverage(rect, void, recip)
   if not vs then return false end
   local covered = {}
-  for _, conn in ipairs(Common.connectionsOn(def, recip)) do
+  for _, conn in ipairs(Connections.connectionsOn(def, recip)) do
     local t = byId[conn.map]
     if t then
       local s, wdt = MapGrid.edgeCoverage(rect, t, recip)

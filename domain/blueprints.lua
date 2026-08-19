@@ -3,9 +3,9 @@
 -- item in the Blueprints tab.  Stamping paints the grid back through the
 -- session's MapOps path (which pushes an undo step).
 
-local Common = require("mods.mapamap.func.common")
-local Coords = require("mods.mapamap.func.coords")
-local Neighbors = require("mods.mapamap.func.neighbors")
+local Common = require("mods.mapamap.common")
+local Coords = require("mods.mapamap.engine.coords")
+local Neighbors = require("mods.mapamap.domain.neighbors")
 local Inventory = require("mods.mapamap.components.inventory")
 
 local Blueprints = {}

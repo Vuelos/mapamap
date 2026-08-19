@@ -1,17 +1,18 @@
 -- World paint operations: placing the selected hotbar item at a cursor cell,
 -- erasing back to the saved baseline, picking the block under the cursor, and
 -- the graphical warp destination-pick click.  The brush's drag state (arm
--- flags, dedupe anchors) lives in a `brush` table owned by input.lua and is
--- passed in so this module stays a pure operation layer.
+-- flags, dedupe anchors) lives in a `brush` table owned by
+-- controllers/editor_tools.lua and is passed in so this module stays a pure
+-- operation layer.
 
-local Common = require("mods.mapamap.func.common")
-local Coords = require("mods.mapamap.func.coords")
-local Neighbors = require("mods.mapamap.func.neighbors")
+local Common = require("mods.mapamap.common")
+local Coords = require("mods.mapamap.engine.coords")
+local Neighbors = require("mods.mapamap.domain.neighbors")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Details = require("mods.mapamap.components.details")
-local Blueprints = require("mods.mapamap.func.blueprints")
-local Objects = require("mods.mapamap.func.objects")
-local Warps = require("mods.mapamap.func.warps")
+local Blueprints = require("mods.mapamap.domain.blueprints")
+local Objects = require("mods.mapamap.domain.objects")
+local Warps = require("mods.mapamap.domain.warps")
 
 local Paint = {}
 
@@ -169,7 +170,7 @@ function Paint.commitVoidStroke(brush, session)
   if not cells or #cells == 0 then return false end
   brush.paintVoidCells = nil
 
-  local MapGrid = require("mods.mapamap.func.map_grid")
+  local MapGrid = require("mods.mapamap.domain.map_grid")
 
   -- Create a host-sized map for the drag (covers a straight drag next to a
   -- single host).  L-shaped strokes may need a map per arm: any cell still

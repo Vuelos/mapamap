@@ -12,11 +12,13 @@
 --   * R         -> toggle rectangle-select blueprint capture (LMB drag)
 --
 -- This module only routes input.  The UI controller state it reads and mutates
--- lives here on the Input table; the actual work is delegated to focused
+-- lives here on the Input table, the brush/tool drag state lives in
+-- controllers/editor_tools.lua, and the actual work is delegated to focused
 -- modules so the dispatchers stay thin:
---   * func/state.lua         -- hotbar/inventory lifecycle + persistence
---   * func/blueprints.lua    -- rectangle-select capture and stamping
---   * func/paint.lua         -- paint / erase / pick / warp dest-pick
+--   * controllers/editor_tools.lua -- brush/tool drag state + paint/erase routing
+--   * storage/config.lua     -- hotbar/inventory lifecycle + persistence
+--   * domain/blueprints.lua  -- rectangle-select capture and stamping
+--   * domain/paint.lua       -- paint / erase / pick / warp dest-pick
 --   * components/hotbar.lua  -- selection model (tag/selected/apply/loadItem)
 --   * components/inventory.lua -- collection model (add/list)
 --   * components/details.lua -- modal Details open/close/keyboard
@@ -25,17 +27,18 @@
 -- All input is guarded by the active flag so the vanilla game is untouched
 -- while the overlay is closed.  Coordinates arrive in LOVE screen units.
 
-local Coords = require("mods.mapamap.func.coords")
-local Neighbors = require("mods.mapamap.func.neighbors")
+local Coords = require("mods.mapamap.engine.coords")
+local Neighbors = require("mods.mapamap.domain.neighbors")
+local EditorTools = require("mods.mapamap.controllers.editor_tools")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Picker = require("mods.mapamap.components.picker")
 local Inventory = require("mods.mapamap.components.inventory")
 local Details = require("mods.mapamap.components.details")
 local EncEditor = require("mods.mapamap.components.encounter_editor")
-local Blueprints = require("mods.mapamap.func.blueprints")
-local Paint = require("mods.mapamap.func.paint")
-local Objects = require("mods.mapamap.func.objects")
-local State = require("mods.mapamap.func.state")
+local Blueprints = require("mods.mapamap.domain.blueprints")
+local Paint = require("mods.mapamap.domain.paint")
+local Objects = require("mods.mapamap.domain.objects")
+local State = require("mods.mapamap.storage.config")
 
 local Input = {}
 
@@ -87,25 +90,6 @@ Input.warpDestPick = false    -- arm "pick destination" for the selected warp
 Input.details = nil           -- { target, fields, index, editing } or nil
 Input.encEditor = nil         -- { session, fields, index, editing } or nil
 
--- Brush drag state (arm flags, drag anchors, dedupe cells).  Owned here, but
--- read and mutated by func/paint.lua through the `brush` argument.
-local brush = {
-  painting = false,
-  erasing = false,
-  draggingEntity = nil,  -- { kind = "warp"|"object", entity = ..., ox, oy } during RMB drag
-  paintingMap = nil,   -- mapId painted on this drag (blocks only)
-  paintVoidCells = nil, -- void cells buffered this drag, committed as one map on release
-  pendingMapClick = nil, -- RMB press over a map body, pending click-vs-drag
-  pendingEntityClick = nil, -- RMB press over a warp/object, deferred click-vs-drag
-  lastBlockX = nil,    -- last painted block coord (re-paint dedupe)
-  lastBlockY = nil,
-  lastCellX = nil,
-  lastCellY = nil,
-}
-
--- Expose entity drag state for the overlay ghost renderer.
-Input.draggingEntity = nil -- copy of brush.draggingEntity for overlay reads
-
 -- The mod's press/release flags are event-driven; a release can be lost to a
 -- window focus flip, input recovery or a cancel, and then the brush would stay
 -- armed forever.  Every move reconciles the flags against the physical mouse,
@@ -139,7 +123,7 @@ local function reconcileMouseHeld()
   if not isDown then return end
   if Input.mouseButtons[1] and not isDown(1) then
     Input.mouseButtons[1] = false
-    brush.painting = false
+    EditorTools.stopPaint()
     if Input.dragItem then
       -- A physical release outside the UI can happen without the release event
       -- reaching us: settle the drag right here so it cannot remain stranded.
@@ -149,11 +133,7 @@ local function reconcileMouseHeld()
   end
   if Input.mouseButtons[2] and not isDown(2) then
     Input.mouseButtons[2] = false
-    brush.erasing = false
-    brush.draggingEntity = nil
-    brush.pendingEntityClick = nil
-    brush.pendingMapClick = nil
-    Input.draggingEntity = nil
+    EditorTools.stopErase()
   end
 end
 
@@ -172,16 +152,10 @@ end
 -- nothing stays armed waiting for a release that will never come.
 function Input.cancelled()
   Input.mouseButtons = { [1] = false, [2] = false, [3] = false }
-  brush.painting = false
-  brush.erasing = false
-  brush.draggingEntity = nil
-  brush.pendingEntityClick = nil
-  brush.paintVoidCells = nil
-  brush.pendingMapClick = nil
-  Input.draggingEntity = nil
   Input.encEditor = nil
   Input.dragItem = nil
   Input.dragFromSlot = nil
+  EditorTools.cancelled()
 end
 
 -- ---------------------------------------------------------------------------
@@ -196,7 +170,10 @@ function Input.inventoryList(session) return Inventory.list(Input) end
 function Input.openDetails(session, target) Details.open(Input, session, target) end
 function Input.closeDetails() Details.close(Input) end
 function Input.keyDetails(session, key) return Details.key(Input, session, key) end
-function Input.reset() State.reset(Input, brush) end
+function Input.reset()
+  EditorTools.reset()
+  State.reset(Input)
+end
 function Input.onMapEntry(session) State.onMapEntry(Input, session) end
 function Input.tagBlock(session, item) return Hotbar.tag(session, item) end
 function Input.selectedItem() return Hotbar.selected(Input) end
@@ -207,8 +184,9 @@ function Input.paintBlueprint(session, bid, mx, my)
   return Blueprints.paint(Input, session, bid, mx, my)
 end
 function Input.pickUnder(session, game, mx, my) return Paint.pickUnder(session, game, mx, my) end
-function Input.paintAt(session, mx, my) return Paint.paintAt(Input, brush, session, mx, my) end
-function Input.eraseAt(session, mx, my) return Paint.eraseAt(Input, brush, session, mx, my) end
+function Input.paintAt(session, mx, my) return EditorTools.apply(Input, session, mx, my) end
+function Input.eraseAt(session, mx, my) return EditorTools.erase(Input, session, mx, my) end
+function Input.commitVoidStroke(session) return EditorTools.commitVoidStroke(session) end
 function Input.saveHotbar(mod) State.saveHotbar(Input, mod) end
 function Input.saveInventory(mod) State.saveInventory(Input, mod) end
 function Input.loadInventory(mod) State.loadInventory(Input, mod) end
@@ -362,17 +340,14 @@ function Input.mousepressed(session, game, mx, my, button)
   end
   -- World paint / erase.
   if button == 1 then
-    brush.painting = true
-    brush.erasing = false
-    brush.lastCellX, brush.lastCellY = nil, nil
-    brush.paintVoidCells = nil
     -- Graphical destination-pick: the next world click wires the selected
     -- warp to land on whatever laid-out map is under the cursor.
     if Input.warpDestPick and session.selectedWarp then
-      brush.painting = false
       Paint.destPick(Input, session, mx, my)
       return true
     end
+    -- Arm the paint brush (a press without a drag still places one block).
+    EditorTools.armPaint()
     Input.applySelection(session)
     -- Paint the cell under the cursor immediately (a press without a drag
     -- must still place one block).
@@ -398,29 +373,21 @@ function Input.mousepressed(session, game, mx, my, button)
     end
     if obj then
       session.selectedObject = obj
-      brush.pendingEntityClick = { kind = "object", entity = obj, mx = mx, my = my }
-      brush.erasing = false
-      brush.painting = false
+      EditorTools.deferEntityClick("object", obj, mx, my)
       return true
     end
     if warp then
       session.selectedWarp = warp
-      brush.pendingEntityClick = { kind = "warp", entity = warp, mx = mx, my = my }
-      brush.erasing = false
-      brush.painting = false
+      EditorTools.deferEntityClick("warp", warp, mx, my)
       return true
     end
     -- Right-click on a map body opens its Details (rename) on release.  A drag
     -- (detected in mousemoved) still erases; only a click opens the panel.
     if mapDef then
-      brush.pendingMapClick = { mx = mx, my = my, mapId = mapId or session.mapId }
-      brush.erasing = false
-      brush.painting = false
+      EditorTools.deferMapClick(mx, my, mapId or session.mapId)
       return true
     end
-    brush.erasing = true
-    brush.painting = false
-    brush.lastCellX, brush.lastCellY = nil, nil
+    EditorTools.armErase()
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
@@ -471,53 +438,50 @@ function Input.mousereleased(session, mx, my, button)
     Input.dragFromSlot = nil
     return true
   end
-  if button == 2 and brush.draggingEntity then
+  if button == 2 then
     -- Release a right-drag: relocate the entity to the cursor cell.
-    local ent = brush.draggingEntity
-    brush.draggingEntity = nil
-    Input.draggingEntity = nil
-    local t = Coords.transform(session.game)
-    if t then
-      local tx, ty = Coords.toWorldCell(t, mx, my)
-      if ent.kind == "warp" then
-        session:moveWarp(ent.entity, tx, ty)
-      elseif ent.kind == "object" then
-        session:moveObject(ent.entity, tx, ty)
+    local ent = EditorTools.releaseEntityDrag()
+    if ent then
+      local t = Coords.transform(session.game)
+      if t then
+        local tx, ty = Coords.toWorldCell(t, mx, my)
+        if ent.kind == "warp" then
+          session:moveWarp(ent.entity, tx, ty)
+        elseif ent.kind == "object" then
+          session:moveObject(ent.entity, tx, ty)
+        end
       end
+      return true
     end
-    return true
-  end
-  if button == 2 and brush.pendingEntityClick then
     -- Right-click (no drag) on a warp/object: open its Details panel.
-    local pc = brush.pendingEntityClick
-    brush.pendingEntityClick = nil
-    if pc.kind == "warp" then
-      Input.openDetails(session, { warp = pc.entity })
-    elseif pc.kind == "object" then
-      Input.openDetails(session, { object = pc.entity })
+    local pc = EditorTools.takeEntityClick()
+    if pc then
+      if pc.kind == "warp" then
+        Input.openDetails(session, { warp = pc.entity })
+      elseif pc.kind == "object" then
+        Input.openDetails(session, { object = pc.entity })
+      end
+      return true
     end
-    return true
-  end
-  if button == 2 and brush.pendingMapClick then
     -- Right-click (no drag) on a map body: open its Details to rename it.
-    local pc = brush.pendingMapClick
-    brush.pendingMapClick = nil
-    local def = (pc.mapId == session.mapId) and session.def
-      or session.data.maps[pc.mapId]
-    if def then
-      Input.openDetails(session, { map = def, mapId = pc.mapId })
+    local mc = EditorTools.takeMapClick()
+    if mc then
+      local def = (mc.mapId == session.mapId) and session.def
+        or session.data.maps[mc.mapId]
+      if def then
+        Input.openDetails(session, { map = def, mapId = mc.mapId })
+      end
+      return true
     end
-    return true
+    -- A plain RMB release settles the erase brush.
+    EditorTools.stopErase()
   end
   if button == 1 then
-    brush.painting = false
+    EditorTools.stopPaint()
     -- A block-paint stroke that hit void buffered its cells; create one map
     -- covering the whole drag and paint them into it now.
-    if brush.paintVoidCells then
-      Paint.commitVoidStroke(brush, session)
-    end
+    Input.commitVoidStroke(session)
   end
-  if button == 2 then brush.erasing = false end
   return false
 end
 
@@ -536,41 +500,21 @@ function Input.mousemoved(session, mx, my)
       Input.selectEnd = { bx = bx, by = by }
       Input._bpMoved = true
     end
-  elseif brush.painting and Input.mouseButtons[1] then
+  elseif EditorTools.isPainting() and Input.mouseButtons[1] then
     Input.paintAt(session, mx, my)
-  elseif brush.pendingMapClick and Input.mouseButtons[2] then
+  elseif Input.mouseButtons[2] then
     -- A right-drag over a map body is an erase, not a details click: once the
     -- pointer moves past the threshold, cancel the pending click and erase.
-    local px = brush.pendingMapClick.mx
-    local py = brush.pendingMapClick.my
-    if (mx - px) * (mx - px) + (my - py) * (my - py) > 25 then
-      brush.pendingMapClick = nil
-      brush.erasing = true
-      brush.lastCellX, brush.lastCellY = nil, nil
+    if EditorTools.maybeEraseFromMap(mx, my) then
+      Input.eraseAt(session, mx, my)
+    -- Right-drag over a warp/object: once past the threshold, arm the entity
+    -- drag and cancel the deferred Details click (the ghost draws at the
+    -- cursor cell until the release relocates the entity).
+    elseif EditorTools.maybeDragEntity(session, mx, my) then
+      -- armed; nothing to do until release
+    elseif EditorTools.isErasing() then
       Input.eraseAt(session, mx, my)
     end
-  elseif brush.pendingEntityClick and Input.mouseButtons[2] then
-    -- Right-drag over a warp/object: once past the threshold, arm the entity
-    -- drag and cancel the deferred Details click.
-    local pc = brush.pendingEntityClick
-    local px, py = pc.mx, pc.my
-    if (mx - px) * (mx - px) + (my - py) * (my - py) > 25 then
-      brush.pendingEntityClick = nil
-      -- Look up the map offset so the overlay ghost draws at the right place.
-      local t = Coords.transform(session.game)
-      local ox, oy = 0, 0
-      if t then
-        local tx, ty = Coords.toWorldCell(t, px, py)
-        local mapId, mapDef, mapOx, mapOy =
-          Neighbors.mapAt(session.def, session.neighbors, tx, ty)
-        ox = mapOx or 0
-        oy = mapOy or 0
-      end
-      brush.draggingEntity = { kind = pc.kind, entity = pc.entity, ox = ox, oy = oy }
-      Input.draggingEntity = brush.draggingEntity
-    end
-  elseif brush.erasing and Input.mouseButtons[2] then
-    Input.eraseAt(session, mx, my)
   end
   -- Track the cursor for the highlight; cheap and always useful.
   local t = Coords.transform(session.game)

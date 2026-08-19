@@ -2,7 +2,7 @@
 -- Captures the editable fields of a map definition, restores them,
 -- and computes a minimal diff patch against a prior snapshot.
 
-local Common = require("mods.mapamap.func.common")
+local Common = require("mods.mapamap.common")
 
 local Snapshot = {}
 

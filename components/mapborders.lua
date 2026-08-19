@@ -11,11 +11,12 @@
 -- Draws in LOVE screen units (the caller has already pushed an identity
 -- matrix via push("all") + origin()).
 
-local Coords = require("mods.mapamap.func.coords")
-local Common = require("mods.mapamap.func.common")
-local MapGrid = require("mods.mapamap.func.map_grid")
+local Coords = require("mods.mapamap.engine.coords")
+local Common = require("mods.mapamap.common")
+local Connections = require("mods.mapamap.domain.connections")
+local MapGrid = require("mods.mapamap.domain.map_grid")
 local Text = require("mods.mapamap.components.text")
-local Input = require("mods.mapamap.input")
+local Input = require("mods.mapamap.controllers.input")
 
 local Borders = {}
 
@@ -136,7 +137,7 @@ function Borders.draw(session, game)
       local def = r.def or session.data.maps[r.id]
       if def then
         for _, dir in ipairs(Common.DIRS) do
-          local all = Common.connectionsOn(def, dir)
+          local all = Connections.connectionsOn(def, dir)
           local extraSet = {}
           local ex = def.connectionsExtra and def.connectionsExtra[dir]
           if ex then for _, c in ipairs(ex) do extraSet[c] = true end end

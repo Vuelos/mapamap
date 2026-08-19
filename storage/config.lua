@@ -25,18 +25,9 @@ function State.serialize(ui)
 end
 
 -- Resets every transient editor flag for a fresh session open.  The brush
--- drag state (paint/erase arm, dedupe anchors) is cleared too.
-function State.reset(ui, brush)
-  brush.painting = false
-  brush.erasing = false
-  brush.draggingWarp = false
-  brush.paintingMap = nil
-  brush.paintVoidCells = nil
-  brush.pendingMapClick = nil
-  brush.lastBlockX = nil
-  brush.lastBlockY = nil
-  brush.lastCellX = nil
-  brush.lastCellY = nil
+-- drag state (paint/erase arm, dedupe anchors) is owned by
+-- controllers/editor_tools.lua and cleared through its reset().
+function State.reset(ui)
   ui.mouseButtons = { [1] = false, [2] = false, [3] = false }
   ui.dragItem = nil
   ui.dragFromSlot = nil

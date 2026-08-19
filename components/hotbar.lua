@@ -2,7 +2,7 @@
 -- Owns its geometry (slot rects, hit-testing) and its draw routine, so the
 -- overlay orchestrator only calls hotbar.draw and input queries hotbar.at.
 
-local Common = require("mods.mapamap.func.common")
+local Common = require("mods.mapamap.common")
 local Item = require("mods.mapamap.components.item")
 local Text = require("mods.mapamap.components.text")
 

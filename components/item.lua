@@ -13,7 +13,7 @@
 -- lazily-built SpriteRenderer; blueprints from the renderer quads scaled to
 -- the box.  Everything runs in LOVE screen units (render.hud space).
 
-local Common = require("mods.mapamap.func.common")
+local Common = require("mods.mapamap.common")
 local TILE_PX = 8
 
 local Item = {}

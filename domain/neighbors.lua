@@ -8,7 +8,8 @@
 -- same set the runtime keeps resident around the current map.
 
 local Neighbors = {}
-local Common = require("mods.mapamap.func.common")
+local Common = require("mods.mapamap.common")
+local Connections = require("mods.mapamap.domain.connections")
 local DIRS = Common.DIRS
 
 local CELL_PX = 16
@@ -41,7 +42,7 @@ function Neighbors.compute(maps, rootId, hops)
     local cur = queue[qi]
     qi = qi + 1
     for _, dir in ipairs(DIRS) do
-      for _, conn in ipairs(Common.connectionsOn(cur.def, dir)) do
+      for _, conn in ipairs(Connections.connectionsOn(cur.def, dir)) do
         local destDef = maps[conn.map]
         if destDef and not placed[conn.map] then
           placed[conn.map] = true

@@ -2,7 +2,7 @@
 -- Builds minimal change-diff patches, saves/loads them via the mod save
 -- system, and provides helpers for export and application.
 
-local Common = require("mods.mapamap.func.common")
+local Common = require("mods.mapamap.common")
 local SaveSerializer = require("src.core.SaveSerializer")
 local Save = {}
 

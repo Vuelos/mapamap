@@ -10,6 +10,7 @@ if not _G.love then _G.love = require("tests.love_stub") end
 
 local MapGrid = require("mods.mapamap.func.map_grid")
 local Common = require("mods.mapamap.func.common")
+local Connections = require("mods.mapamap.domain.connections")
 
 -- A minimal map def enough for MapGrid.layout / NewMap.buildDef.
 local function miniMap(id, w, h, conns)
@@ -46,11 +47,11 @@ end
 -- map, with a negated offset (and the same size span).
 local function assertReciprocal(maps, def, where)
   for _, dir in ipairs(Common.DIRS) do
-    for _, c in ipairs(Common.connectionsOn(def, dir)) do
+    for _, c in ipairs(Connections.connectionsOn(def, dir)) do
       local other = maps[c.map]
       local back = Common.RECIP[dir]
       local r
-      for _, rc in ipairs(Common.connectionsOn(other, back)) do
+      for _, rc in ipairs(Connections.connectionsOn(other, back)) do
         if rc.map == def.id then r = rc break end
       end
       assert(other, where .. ": " .. def.id .. " -> " .. c.map .. " missing def")

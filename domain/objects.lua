@@ -1,6 +1,6 @@
 -- module for Session handling object and NPC instances on the edited map.
 
-local Gen = require("mods.mapamap.func.gen")
+local Gen = require("mods.mapamap.engine.gen")
 
 local Objects = {}
 

@@ -18,9 +18,10 @@
 -- Thumbnails reuse the map renderer's tile atlas (blocks) and a lazily-built
 -- SpriteRenderer (sprites) via components/item.lua.
 
-local Coords = require("mods.mapamap.func.coords")
-local Input = require("mods.mapamap.input")
-local Neighbors = require("mods.mapamap.func.neighbors")
+local Coords = require("mods.mapamap.engine.coords")
+local Input = require("mods.mapamap.controllers.input")
+local EditorTools = require("mods.mapamap.controllers.editor_tools")
+local Neighbors = require("mods.mapamap.domain.neighbors")
 local Borders = require("mods.mapamap.components.mapborders")
 local Item = require("mods.mapamap.components.item")
 local Hotbar = require("mods.mapamap.components.hotbar")
@@ -277,7 +278,7 @@ end
 -- Draws a translucent circle at the cursor cell so the user sees where the
 -- entity will land on release.
 local function drawEntityDrag(session, game)
-  local drag = Input.draggingEntity
+  local drag = EditorTools.draggingEntity
   if not drag then return end
   local t = Coords.transform(game)
   if not t then return end

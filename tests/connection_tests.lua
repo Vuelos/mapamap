@@ -12,10 +12,12 @@ local Data = require("src.core.Data")
 if not (Data.maps and Data.maps.PALLET_TOWN) then Data:load() end
 local data = Data
 
-local Session = require("mods.mapamap.session")
+local EditSession = require("mods.mapamap.func.domain.edit_session")
+local WorldAdapter = require("mods.mapamap.func.engine.world_adapter")
 local Input = require("mods.mapamap.input")
-local MapGrid = require("mods.mapamap.func.map_grid")
+local MapGrid = require("mods.mapamap.func.domain.map_grid")
 local Common = require("mods.mapamap.func.common")
+local Connections = require("mods.mapamap.domain.connections")
 
 local mod = {
   log = { warn = function() end, info = function() end, error = function() end },
@@ -32,13 +34,13 @@ end
 -- map, with a negated offset (and the same size span).
 local function assertReciprocal(def, rootId, where)
   for _, dir in ipairs(Common.DIRS) do
-    for _, c in ipairs(Common.connectionsOn(def, dir)) do
+    for _, c in ipairs(Connections.connectionsOn(def, dir)) do
       local other = data.maps and data.maps[c.map]
       local back = Common.RECIP[dir]
       assert(other, where .. ": " .. def.id .. " -> " .. c.map .. " missing def")
       assert(back, where .. ": bad dir " .. tostring(dir))
       local r
-      for _, rc in ipairs(Common.connectionsOn(other, back)) do
+      for _, rc in ipairs(Connections.connectionsOn(other, back)) do
         if rc.map == def.id then r = rc break end
       end
       assert(r, where .. ": " .. def.id .. "->" .. c.map
@@ -63,7 +65,7 @@ function test_connectionsOnFlattensMergedArraySide()
     },
   }
 
-  local list = Common.connectionsOn(def, "west")
+  local list = Connections.connectionsOn(def, "west")
   assert(#list == 2, "merged west side should flatten into two connections, got " .. #list)
   assert(list[1].map == "A" and list[2].map == "B",
     "flattened west list must be ordered by seam offset so the correct extra is first")
@@ -72,7 +74,7 @@ function test_connectionsOnFlattensMergedArraySide()
     connections = { west = { map = "B", offset = 8, size = 4 } },
     connectionsExtra = { west = { { map = "A", offset = 0, size = 4 } } },
   }
-  local merged = Common.connectionsOn(withPrimary, "west")
+  local merged = Connections.connectionsOn(withPrimary, "west")
   assert(#merged == 2, "primary + extra west side should flatten to two entries, got " .. #merged)
   assert(merged[1].map == "A" and merged[2].map == "B",
     "west-side flattening must order the seam by offset so the active extra connection comes first")
@@ -150,7 +152,7 @@ end
 -- Identity transform so Input.paintAt can map screen -> world cells headless
 -- (a live overworld/camera does not exist under the stub).
 local function stubTransform()
-  local Coords = require("mods.mapamap.func.coords")
+  local Coords = require("mods.mapamap.func.engine.coords")
   local orig = Coords.transform
   Coords.transform = function()
     return { camx = 0, camy = 0, sx = 1, sy = 1, wox = 0, woy = 0 }
@@ -159,10 +161,10 @@ local function stubTransform()
 end
 
 -- Control+Z (undo) must not crash: the undo path in map_ops restoreSnapshot
--- calls reloadMap() on the primary-map branch, which mapamap's Session must
+-- calls reloadMap() on the primary-map branch, which mapamap's EditSession must
 -- provide (it is not mixed in from map_editor's full-screen scene).
 function test_undoAfterPaintDoesNotCrash()
-  local s = Session.new(mod, game, "PALLET_TOWN")
+  local s = EditSession.new(mod, game, "PALLET_TOWN", data)
   assert(s, "no session for PALLET_TOWN")
   s:rebuildNeighbors()
   local before = s.def.blocks[1]
@@ -186,7 +188,7 @@ end
 -- connection graph -- never a dangling / offset-shifted side extension.
 function test_gridCreateWiresFlushReciprocals()
   restoreGraph()
-  local s = Session.new(mod, game, "PALLET_TOWN")
+  local s = EditSession.new(mod, game, "PALLET_TOWN", data)
   assert(s, "no session for PALLET_TOWN")
   s:rebuildNeighbors()
   local id = MapGrid.fillNextVoid(s, 1)
@@ -213,7 +215,7 @@ end
 -- paint then no-ops).
 function test_cellInsideNeighborAfterCreate()
   restoreGraph()
-  local s = Session.new(mod, game, "PALLET_TOWN")
+  local s = EditSession.new(mod, game, "PALLET_TOWN", data)
   assert(s, "no session for PALLET_TOWN")
   s:rebuildNeighbors()
   local id = MapGrid.fillNextVoid(s, 1)
@@ -236,7 +238,7 @@ end
 -- on load (MapGrid.autofill), never on paint.
 function test_paintBeyondAllBodiesNoops()
   restoreGraph()
-  local s = Session.new(mod, game, "PALLET_TOWN")
+  local s = EditSession.new(mod, game, "PALLET_TOWN", data)
   assert(s, "no session for PALLET_TOWN")
   local before = Common.deepCopy(s.def.blocks)
   local createdBefore = gridCreatedCount()

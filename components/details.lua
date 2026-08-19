@@ -12,7 +12,7 @@
 local Inventory = require("mods.mapamap.components.inventory")
 local Panel = require("mods.mapamap.components.panel")
 local Text = require("mods.mapamap.components.text")
-local Objects = require("mods.mapamap.func.objects")
+local Objects = require("mods.mapamap.domain.objects")
 
 local Details = {}
 

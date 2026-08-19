@@ -7,9 +7,9 @@
 -- input handler can trigger directly.
 
 local NewMap = {}
-local Neighbors = require("mods.mapamap.func.neighbors")
-local Common = require("mods.mapamap.func.common")
-local Connections = require("mods.mapamap.func.connections")
+local Neighbors = require("mods.mapamap.domain.neighbors")
+local Common = require("mods.mapamap.common")
+local Connections = require("mods.mapamap.domain.connections")
 local BLOCK_PX = Common.BLOCK_PX
 
 -- True when `name` is already used as another map's display name (a map's

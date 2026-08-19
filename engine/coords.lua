@@ -22,7 +22,7 @@
 local ok_R, Renderer = pcall(require, "src.render.Renderer")
 local ok_Z, Zoom = pcall(require, "src.render.Zoom")
 local ok_T, Tilt = pcall(require, "src.render.Tilt")
-local Gen = require("mods.mapamap.func.gen")
+local Gen = require("mods.mapamap.engine.gen")
 local function tiltActive() return ok_T and Tilt.active() end
 
 local Coords = {}

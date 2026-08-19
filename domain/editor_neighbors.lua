@@ -1,10 +1,11 @@
 -- Neighbor management and map switching for the editor screen.
 
-local Neighbors = require("mods.mapamap.func.neighbors")
-local Gen = require("mods.mapamap.func.gen")
-local Snapshot = require("mods.mapamap.func.snapshot")
-local Common = require("mods.mapamap.func.common")
-local Undo = require("mods.mapamap.func.undo")
+local Neighbors = require("mods.mapamap.domain.neighbors")
+local Gen = require("mods.mapamap.engine.gen")
+local Snapshot = require("mods.mapamap.domain.snapshot")
+local Common = require("mods.mapamap.common")
+local Connections = require("mods.mapamap.domain.connections")
+local Undo = require("mods.mapamap.domain.undo")
 local PaletteFX = require("src.render.PaletteFX")
 local FieldDefaults = require("src.world.FieldDefaults")
 local BLOCK_PX = Common.BLOCK_PX
@@ -59,7 +60,7 @@ function EditorNeighbors.snapshotRecipConnections(self)
     for otherId, otherDef in pairs(self.data.maps) do
       if otherId ~= self.mapId then
         for _, dir in ipairs(Common.DIRS) do
-          for _, conn in ipairs(Common.connectionsOn(otherDef, dir)) do
+          for _, conn in ipairs(Connections.connectionsOn(otherDef, dir)) do
             if conn.map == self.mapId then
               out[otherId] = Common.deepCopy(otherDef.connections)
               break

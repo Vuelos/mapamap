@@ -1,10 +1,10 @@
 -- Map editing operations: paint, revert, flood fill, expand, undo/redo,
 -- and original-state snapshots.
 
-local Fill = require("mods.mapamap.func.fill")
-local Common = require("mods.mapamap.func.common")
-local Snapshot = require("mods.mapamap.func.snapshot")
-local Gen = require("mods.mapamap.func.gen")
+local Fill = require("mods.mapamap.domain.fill")
+local Common = require("mods.mapamap.common")
+local Snapshot = require("mods.mapamap.domain.snapshot")
+local Gen = require("mods.mapamap.engine.gen")
 local CELL_PX = Common.CELL_PX
 local BLOCK_PX = Common.BLOCK_PX
 
@@ -51,7 +51,7 @@ function MapOps.reconcileReciprocalConnections(self, persist)
       self.neighborDirty[otherId] = true
     end
     if persist then
-      local Save = require("mods.mapamap.func.save")
+      local Save = require("mods.mapamap.storage.patch_saver")
       for otherId in pairs(changed) do
         Save.updatePatchField(self.mod, otherId, "connections",
           Common.deepCopy(data.maps[otherId].connections))
@@ -247,8 +247,8 @@ function MapOps.paintBlock(self)
 -- step per touched map and can be undone/redone with Ctrl+Z / Ctrl+Y like any
 -- block paint.
 function MapOps.paintBlueprint(self, bp)
-  local Neighbors = require("mods.mapamap.func.neighbors")
-  local Graft = require("mods.mapamap.func.graft")
+local Neighbors = require("mods.mapamap.domain.neighbors")
+local Graft = require("mods.mapamap.engine.graft")
   local bx0 = math.floor(self.cursorBx / 2)
   local by0 = math.floor(self.cursorBy / 2)
   local changed = false
@@ -363,6 +363,11 @@ function MapOps.paintBlueprint(self, bp)
       rebuildFor(self, g.mapId)
     end
     self.mapChanged = true
+  end
+
+  self:refreshLiveRenderers()
+  if self.refreshObjects then
+    self:refreshObjects()
   end
   return changed
 end

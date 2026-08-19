@@ -10,7 +10,7 @@
 -- ordering, and the draw routine.  Input queries it for hit-testing; the
 -- overlay orchestrator only calls Picker.draw.
 
-local Common = require("mods.mapamap.func.common")
+local Common = require("mods.mapamap.common")
 local Item = require("mods.mapamap.components.item")
 local Inventory = require("mods.mapamap.components.inventory")
 local Panel = require("mods.mapamap.components.panel")
