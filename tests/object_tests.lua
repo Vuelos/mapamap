@@ -11,10 +11,11 @@ local Data = require("src.core.Data")
 if not (Data.maps and Data.maps.PALLET_TOWN) then Data:load() end
 local data = Data
 
-local Session = require("mods.mapamap.session")
-local Input = require("mods.mapamap.input")
+local Session = require("mods.mapamap.domain.edit_session")
+local Input = require("mods.mapamap.controllers.input")
 local Inventory = require("mods.mapamap.components.inventory")
 local Details = require("mods.mapamap.components.details")
+local Panel = require("mods.mapamap.components.panel")
 
 local mod = {
   log = { warn = function() end, info = function() end, error = function() end },
@@ -45,7 +46,7 @@ local function inventoryCellCentre(i)
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
   return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
-         py + Panel.PAD + Panel.TAB_H + Inventory.GAP
+         py + Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP + Panel.TAB_H + Inventory.GAP
             + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
 end
 
@@ -178,8 +179,8 @@ function test_detailsObjectDeleteByMouseClick()
   local n = #Input.details.fields
   assert(n == 4, "object details lists 4 rows")
   local px, py, pw, ph = Details.rect(VW, VH)
-  local rowY = py + Details.PAD + 20
-  local delY = rowY + (n - 1) * (Details.ROW_H + 6)
+  local rowY = py + Panel.PAD + 20
+  local delY = rowY + (n - 1) * (Panel.ROW_H + 6)
   assert(Input.mousepressed(s, game, px + pw / 2, delY, 1),
     "click on the DELETE row is consumed")
   assert(#s.def.objects == 0, "mouse-click DELETE removes the object")
@@ -225,8 +226,8 @@ function test_detailsWarpDeleteByMouseClick()
   local n = #Input.details.fields
   assert(n == 5, "warp details lists 5 rows")
   local px, py, pw, ph = Details.rect(VW, VH)
-  local rowY = py + Details.PAD + 20
-  local delY = rowY + (n - 1) * (Details.ROW_H + 6)
+  local rowY = py + Panel.PAD + 20
+  local delY = rowY + (n - 1) * (Panel.ROW_H + 6)
   assert(Input.mousepressed(s, game, px + pw / 2, delY, 1),
     "click on the warp DELETE row is consumed")
   assert(#s.def.warps == 0, "warp removed by mouse click")
@@ -246,7 +247,7 @@ end
 -- Identity transform so Input.paintAt can map screen -> world cells headless
 -- (a live overworld/camera does not exist under the stub).
 local function stubTransform()
-  local Coords = require("mods.mapamap.func.coords")
+  local Coords = require("mods.mapamap.engine.coords")
   local orig = Coords.transform
   Coords.transform = function()
     return { camx = 0, camy = 0, sx = 1, sy = 1, wox = 0, woy = 0 }

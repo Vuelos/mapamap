@@ -12,10 +12,10 @@ local Data = require("src.core.Data")
 if not (Data.maps and Data.maps.PALLET_TOWN) then Data:load() end
 local data = Data
 
-local Session = require("mods.mapamap.session")
-local Input = require("mods.mapamap.input")
+local Session = require("mods.mapamap.domain.edit_session")
+local Input = require("mods.mapamap.controllers.input")
 local Overlay = require("mods.mapamap.components.overlay")
-local Coords = require("mods.mapamap.func.coords")
+local Coords = require("mods.mapamap.engine.coords")
 local Hotbar = require("mods.mapamap.components.hotbar")
 
 local mod = {
@@ -197,7 +197,7 @@ function test_mapBorderDrawsConnectionBands()
   local on = recordingColors(function()
     withTransform(flatTransform(), function() Overlay.draw(s, game, nil) end)
   end)
-  assert(hasColor(on, 1, 0.6, 0.1, 0.9),
+  assert(hasColor(on, 1, 0.6, 0.1, 0.5),
     "primary connection markers are drawn (orange border) while toggled on")
   -- A toggle-off run draws no connection markers at all.
   Input.showMapBorders = false
@@ -206,6 +206,59 @@ function test_mapBorderDrawsConnectionBands()
   end)
   assert(not hasColor(off, 1, 0.6, 0.1, 0.9),
     "no connection markers while the toggle is off")
+end
+
+-- A dialog (TextBox), battle or any other state stacked above the overworld
+-- hides the world markers (warp circles, map borders, cursor).  Over the bare
+-- overworld they all draw; with a TextBox on top none of them may appear even
+-- though the panels keep rendering.
+function test_worldMarkersHiddenByStackAbove()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  freshInput()
+
+  local function markerGame(overlay)
+    -- Like the real game: the overworld state sits at the bottom of the stack
+    -- with the dialog/battle state pushed on top of it.
+    local ow = { isOverworld = true, camera = { x = 0, y = 0 } }
+    local g = { data = data, overworld = ow,
+                stack = { states = { ow } } }
+    if overlay then g.stack.states[#g.stack.states + 1] = overlay end
+    return g
+  end
+
+  -- Bare overworld: cursor accent, current-map border ring and warp circles
+  -- all draw.
+  local bare = markerGame(nil)
+  local markers = recordingColors(function()
+    withTransform(flatTransform(), function() Overlay.draw(s, bare, nil) end)
+  end)
+  assert(hasColor(markers, 1, 0.9, 0.3, 0.9),
+    "cursor accent draws over the bare overworld")
+  assert(hasColor(markers, 1, 1, 0, 0.95),
+    "current-map border ring draws over the bare overworld")
+
+  -- TextBox dialog: none of the three marker families may appear.
+  local dialog = markerGame({ isTextBox = true })
+  local hidden = recordingColors(function()
+    withTransform(flatTransform(), function() Overlay.draw(s, dialog, nil) end)
+  end)
+  assert(not hasColor(hidden, 1, 0.9, 0.3, 0.9),
+    "no cursor accent while a dialog is up")
+  assert(not hasColor(hidden, 1, 1, 0, 0.95),
+    "no current-map border while a dialog is up")
+  assert(not hasColor(hidden, 0.2, 0.45, 1, 0.85),
+    "no warp circles while a dialog is up")
+
+  -- Battle flag (Gen 2 World): markers hidden the same way.
+  local battle = { data = data, world = { battleActive = true, camera = { x = 0, y = 0 } },
+                   stack = { states = {} } }
+  local inBattle = recordingColors(function()
+    withTransform(flatTransform(), function() Overlay.draw(s, battle, nil) end)
+  end)
+  assert(not hasColor(inBattle, 1, 0.9, 0.3, 0.9),
+    "no cursor accent during a battle")
+  assert(not hasColor(inBattle, 0.2, 0.45, 1, 0.85),
+    "no warp circles during a battle")
 end
 
 return {
@@ -218,5 +271,6 @@ return {
     "test_hotbarBandClearsInventory",
     "test_mapBorderToggleGatesDraw",
     "test_mapBorderDrawsConnectionBands",
+    "test_worldMarkersHiddenByStackAbove",
   },
 }

@@ -6,7 +6,7 @@ package.path = "../../../?.lua;" .. package.path
 
 if not _G.love then _G.love = require("tests.love_stub") end
 
-local Coords = require("mods.mapamap.func.coords")
+local Coords = require("mods.mapamap.engine.coords")
 
 -- Build a transform with explicit values so the tests are self-contained and
 -- do not depend on the live Renderer / camera (a headless harness has none).

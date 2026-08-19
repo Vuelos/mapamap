@@ -10,11 +10,12 @@ local Data = require("src.core.Data")
 if not (Data.maps and Data.maps.PALLET_TOWN) then Data:load() end
 local data = Data
 
-local Session = require("mods.mapamap.session")
-local Input = require("mods.mapamap.input")
+local Session = require("mods.mapamap.domain.edit_session")
+local Input = require("mods.mapamap.controllers.input")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local PickerM = require("mods.mapamap.components.picker")
 local Inventory = require("mods.mapamap.components.inventory")
+local Panel = require("mods.mapamap.components.panel")
 
 local mod = {
   log = { warn = function() end, info = function() end, error = function() end },
@@ -39,7 +40,7 @@ local VW, VH = 640, 576
 local function pickerCellCentre(i)
   local ix, iy, _, _ = PickerM.rect(VW, VH)
   local cols = PickerM.cols(VW, VH)
-  local gx = ix + PickerM.PAD
+  local gx = ix + Panel.PAD
   local gy = iy + PickerM.HEAD_H + 6
   local ci = i - 1
   local col = ci % cols
@@ -55,7 +56,7 @@ local function inventoryCellCentre(i)
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
   return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
-         py + Panel.PAD + Panel.TAB_H + Inventory.GAP
+         py + Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP + Panel.TAB_H + Inventory.GAP
             + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
 end
 
@@ -158,7 +159,7 @@ function test_hotbarTagSurvivesMapEntryAndGraftsForeign()
 end
 
 local function stubTransform()
-  local Coords = require("mods.mapamap.func.coords")
+  local Coords = require("mods.mapamap.engine.coords")
   local orig = Coords.transform
   Coords.transform = function()
     return { camx = 0, camy = 0, sx = 1, sy = 1, wox = 0, woy = 0 }

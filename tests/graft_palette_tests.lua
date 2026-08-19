@@ -25,7 +25,7 @@ local Map = require("src.world.Map")
 local TileRenderer = require("src.render.TileRenderer")
 local PaletteFX = require("src.render.PaletteFX")
 local Assets = require("src.render.Assets")
-local Graft = require("mods.mapamap.func.graft")
+local Graft = require("mods.mapamap.engine.graft")
 
 -- ------- pixel stubs (swap in during setup, restored after) --------------
 

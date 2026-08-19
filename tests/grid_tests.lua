@@ -8,8 +8,8 @@ package.path = "../../../?.lua;" .. package.path
 
 if not _G.love then _G.love = require("tests.love_stub") end
 
-local MapGrid = require("mods.mapamap.func.map_grid")
-local Common = require("mods.mapamap.func.common")
+local MapGrid = require("mods.mapamap.domain.map_grid")
+local Common = require("mods.mapamap.common")
 local Connections = require("mods.mapamap.domain.connections")
 
 -- A minimal map def enough for MapGrid.layout / NewMap.buildDef.

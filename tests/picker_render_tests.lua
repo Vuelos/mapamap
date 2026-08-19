@@ -14,7 +14,7 @@ local Data = require("src.core.Data")
 if not (Data.maps and Data.maps.PALLET_TOWN) then Data:load() end
 local data = Data
 
-local Session = require("mods.mapamap.session")
+local Session = require("mods.mapamap.domain.edit_session")
 local Picker = require("mods.mapamap.components.picker")
 
 local mod = {

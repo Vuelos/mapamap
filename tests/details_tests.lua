@@ -1,7 +1,7 @@
 -- Details panel: renaming a laid-out map (edited map or a loaded neighbor)
 -- through Session:setMapName and through the Details panel itself.
 
-local Session = require("mods.mapamap.session")
+local Session = require("mods.mapamap.domain.edit_session")
 local Details = require("mods.mapamap.components.details")
 
 local Data = require("src.core.Data")

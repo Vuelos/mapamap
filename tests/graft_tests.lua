@@ -6,9 +6,9 @@ package.path = "../../../?.lua;" .. package.path
 
 if not _G.love then _G.love = require("tests.love_stub") end
 
-local Graft = require("mods.mapamap.func.graft")
-local Undo = require("mods.mapamap.func.undo")
-local Save = require("mods.mapamap.func.save")
+local Graft = require("mods.mapamap.engine.graft")
+local Undo = require("mods.mapamap.domain.undo")
+local Save = require("mods.mapamap.storage.patch_saver")
 
 -- A tileset whose atlas ImageData reports 8x8 px = 2 native 8px tile slots
 -- (the numbers are irrelevant; the structure is what the mapping math reads).

@@ -11,11 +11,12 @@ local Data = require("src.core.Data")
 if not (Data.maps and Data.maps.PALLET_TOWN) then Data:load() end
 local data = Data
 
-local Session = require("mods.mapamap.session")
-local Input = require("mods.mapamap.input")
+local Session = require("mods.mapamap.domain.edit_session")
+local Input = require("mods.mapamap.controllers.input")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Inventory = require("mods.mapamap.components.inventory")
-local MapOps = require("mods.mapamap.func.map_ops")
+local MapOps = require("mods.mapamap.domain.map_ops")
+local Panel = require("mods.mapamap.components.panel")
 
 local mod = {
   log = { warn = function() end, info = function() end, error = function() end },
@@ -43,7 +44,7 @@ local function inventoryCellCentre(i)
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
   return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
-         py + Panel.PAD + Panel.TAB_H + Inventory.GAP
+         py + Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP + Panel.TAB_H + Inventory.GAP
             + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
 end
 
@@ -90,13 +91,14 @@ end
 
 function test_tabAt_fit()
   local x, y, _, _ = Inventory.rect(VW, VH)
-  -- The tab row starts at py + PAD; the trim above it is panel padding.
+  local _, ty, _, _ = Inventory.tabRect(VW, VH, 1)
+  -- Top padding and the title row sit above the tab row.
   assert(Inventory.tabAt(VW, VH, x + 2, y + 2) == nil, "top padding sits above the tab row")
-  assert(Inventory.tabAt(VW, VH, x + Panel.PAD, y + Panel.PAD) == 1,
+  assert(Inventory.tabAt(VW, VH, x + Panel.PAD, ty) == 1,
     "first tab spans the tab-row origin")
-  local tx, ty = tabCentre(3)
-  assert(Inventory.tabAt(VW, VH, tx, ty) == 3, "third tab hit-tests")
-  assert(Inventory.tabAt(VW, VH, tx, ty - 40) == nil, "above the tab row is nil")
+  local tx, ty2 = tabCentre(3)
+  assert(Inventory.tabAt(VW, VH, tx, ty2) == 3, "third tab hit-tests")
+  assert(Inventory.tabAt(VW, VH, tx, ty2 - 40) == nil, "above the tab row is nil")
 end
 
 -- Font stub with a width method (glyphs are 8px each, matching the nil-font
@@ -115,8 +117,8 @@ function test_tabRectTextFit()
   assert(x3 == x2 + w2 + Panel.TAB_GAP, "tab 3 starts one gap after tab 2")
   assert(x4 > x3 + w3, "tab 4 starts after tab 3")
   -- Hit-testing agrees with the per-text rects.
-  local px, py = Inventory.rect(VW, VH)
-  local ty = py + Panel.PAD + Panel.TAB_H / 2
+  local _, tabY, _, _ = Inventory.tabRect(VW, VH, 1, fakeFont)
+  local ty = tabY + Panel.TAB_H / 2
   assert(Inventory.tabAt(VW, VH, x4 + w4 / 2, ty, fakeFont) == 4,
     "Blueprints hit-tests inside its own button")
   assert(Inventory.tabAt(VW, VH, x2 + w2 + Panel.TAB_GAP / 2, ty, fakeFont) == nil,
@@ -364,6 +366,7 @@ function test_blueprintPaintCanSpanVisibleMaps()
     neighborMaps = { EAST = { renderer = { rebuild = function() rebuilt.east = rebuilt.east + 1 end } } },
     neighborDirty = {},
     map = { renderer = { rebuild = function() rebuilt.root = rebuilt.root + 1 end } },
+    refreshLiveRenderers = function() end,
     cursorBx = 2,
     cursorBy = 0,
   }

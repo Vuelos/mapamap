@@ -12,11 +12,12 @@ local Data = require("src.core.Data")
 if not (Data.maps and Data.maps.PALLET_TOWN) then Data:load() end
 local data = Data
 
-local EditSession = require("mods.mapamap.func.domain.edit_session")
-local WorldAdapter = require("mods.mapamap.func.engine.world_adapter")
-local Input = require("mods.mapamap.input")
-local MapGrid = require("mods.mapamap.func.domain.map_grid")
-local Common = require("mods.mapamap.func.common")
+local EditSession = require("mods.mapamap.domain.edit_session")
+local Session = EditSession
+local WorldAdapter = require("mods.mapamap.engine.world_adapter")
+local Input = require("mods.mapamap.controllers.input")
+local MapGrid = require("mods.mapamap.domain.map_grid")
+local Common = require("mods.mapamap.common")
 local Connections = require("mods.mapamap.domain.connections")
 
 local mod = {
@@ -152,7 +153,7 @@ end
 -- Identity transform so Input.paintAt can map screen -> world cells headless
 -- (a live overworld/camera does not exist under the stub).
 local function stubTransform()
-  local Coords = require("mods.mapamap.func.engine.coords")
+  local Coords = require("mods.mapamap.engine.coords")
   local orig = Coords.transform
   Coords.transform = function()
     return { camx = 0, camy = 0, sx = 1, sy = 1, wox = 0, woy = 0 }
