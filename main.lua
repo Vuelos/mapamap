@@ -21,7 +21,14 @@ local Common = require("mods.mapamap.func.common")
 local Connections = require("mods.mapamap.func.connections")
 local NewMap = require("mods.mapamap.func.new_map")
 local MapGrid = require("mods.mapamap.func.map_grid")
+local Gen = require("mods.mapamap.func.gen")
 local Hotbar = require("mods.mapamap.components.hotbar")
+
+-- Safe xpcall error handler: the game's mod sandbox strips `debug`, so a bare
+-- `debug.traceback` (evaluated as the 2nd arg to xpcall) raises "attempt to
+-- index nil" OUTSIDE the protected call and hard-crashes the game.  This only
+-- touches `debug` lazily, falling back to tostring when it is unavailable.
+local function tb(err) return (debug and debug.traceback or tostring)(err) end
 
 local active = false
 local session = nil
@@ -31,8 +38,14 @@ local session = nil
 local function currentMapId(game)
   if not game then return nil end
 
+  -- Gen 1: game.overworld is the live OverworldState (or the Gen2Compat facade).
   if game.overworld and game.overworld.map and game.overworld.map.id then
     return game.overworld.map.id
+  end
+
+  -- Gen 2 native: the World lives at game.world, not game.overworld.
+  if game.world and game.world.map and game.world.map.id then
+    return game.world.map.id
   end
 
   if game.state and game.state.map and game.state.map.id then
@@ -59,58 +72,12 @@ local function currentMapId(game)
     if save.player.map then return save.player.map end
     if save.player.currentMap then return save.player.currentMap end
   end
+  -- Gen 2 save: position is at save.position, not save.player.
+  if save and save.position and save.position.map then
+    return save.position.map
+  end
 
   return nil
-end
-
--- Merges connectionsExtra into connections so the engine can use extra
--- connections during neighbor computation. Extra connections are stored in
--- connectionsExtra[dir] as an array; this function makes them visible to the
--- engine by merging them with the primary connection in connections[dir].
-local function mergeExtraConnections(mod, data)
-  if not data or not data.maps then return end
-  for mapId, def in pairs(data.maps) do
-    if def.connectionsExtra then
-      if not def.connections then def.connections = {} end
-      for dir, extras in pairs(def.connectionsExtra) do
-        if extras and #extras > 0 then
-          local merged = {}
-          local primary = def.connections[dir]
-          if primary then
-            for _, conn in ipairs(Connections.connectionList(primary)) do
-              merged[#merged + 1] = conn
-            end
-          end
-          for i = 1, #extras do
-            merged[#merged + 1] = extras[i]
-          end
-          table.sort(merged, function(a, b)
-            local ao = a and a.offset or 0
-            local bo = b and b.offset or 0
-            if ao == bo then
-              local am = a and a.map or ""
-              local bm = b and b.map or ""
-              return am < bm
-            end
-            return ao < bo
-          end)
-          if #merged == 1 then
-            def.connections[dir] = merged[1]
-          elseif #merged > 1 then
-            def.connections[dir] = merged
-          end
-          local entries = {}
-          for _, conn in ipairs(merged) do
-            entries[#entries + 1] = string.format("%s@%s", tostring(conn.map), tostring(conn.offset or 0))
-          end
-          mod.log:info("mapamap debug: merged %d extra connection(s) on %s.%s -> %s",
-            #extras, mapId, dir, table.concat(entries, ", "))
-          mod.log:info("mapamap: merged %d extra connection(s) on %s.%s",
-            #extras, mapId, dir)
-        end
-      end
-    end
-  end
 end
 
 -- Persists every map edited during this session (primary + neighbors + new
@@ -186,13 +153,11 @@ local function openSession(mod, game)
     return nil
   end
   s:applySavedPatches()
-  -- Merge extra connections into primary connections so the engine can use them
-  mergeExtraConnections(mod, s.data)
-  -- Grid expansion runs on both the initial open and every map-entry: the
-  -- session must always have a connected ring around it before edits/draws use
-  -- the live map graph.
-  ensureConnectedMaps(s)
-  -- Hotbar: restore a saved layout, else seed with the first few blocks.
+  Connections:mergeExtraConnections(mod, s.data)
+  local okExpand, expandErr = pcall(ensureConnectedMaps, s)
+  if not okExpand then
+    mod.log:warn("mapamap: grid expansion failed on open: %s", tostring(expandErr))
+  end
   local saved = mod.save:get("mapamap_hotbar", nil)
   if saved and type(saved) == "table" and #saved > 0 then
     Input.configure(saved)
@@ -207,20 +172,16 @@ local function openSession(mod, game)
     Input.saveHotbar(mod)
   end
   Input.applySelection(s)
-  -- Lock block slots to this map's tileset immediately so crossing a border
-  -- never re-seeds them onto the incoming map's palette (tiles stay stable).
   for i = 1, Hotbar.SLOTS do
     Input.tagBlock(s, Input.hotbar[i])
   end
-  Input.loadInventory(mod)
-  -- A fresh inventory starts seeded with the default hotbar blocks so the
-  -- panel is never empty on first use.
-  if #Input.inventory.items == 0 then
+    Input.loadInventory(mod)
+    if #Input.inventory.items == 0 then
     for i = 1, Hotbar.SLOTS do
       if Input.hotbar[i] then Input.addInventory(Input.hotbar[i]) end
     end
   end
-  return s
+    return s
 end
 
 local function closeSession(mod, game)
@@ -244,7 +205,10 @@ local function reconcileSession(mod, game)
   session = s
   -- Re-point picker/hotbar onto the incoming map's tileset and grow the
   -- connected map ring on entry so the new map always has neighbors to paint on.
-  ensureConnectedMaps(session)
+  local okExpand, expandErr = pcall(ensureConnectedMaps, session)
+  if not okExpand then
+    mod.log:warn("mapamap: grid expansion failed on map entry: %s", tostring(expandErr))
+  end
   Input.onMapEntry(session)
   Input.applySelection(session)
   -- Re-sync the cursor from the current mouse position so the highlight
@@ -275,8 +239,7 @@ local function createAdjacentMap(mod, game, side)
   local data = session.data
   local newDef = data.maps[newId]
   local tileset = data.tilesets[newDef.tileset]
-  local MapLoader = require("src.world.MapLoader")
-  local m = MapLoader.load(data, newId)
+  local m = Gen.loadMap(data, newId)
   session.mapId = newId
   session.def = newDef
   session.tileset = tileset
@@ -290,17 +253,56 @@ local function createAdjacentMap(mod, game, side)
   session:storeOriginal()
 end
 
-local function run(mod)
+  local function logCrash(mod, where, err)
+    local msg = "[" .. tostring(where) .. "] " .. tostring(err) .. "\n" .. tb(err)
+    -- Best-effort, never let the logger itself crash the handler.
+    pcall(function() if mod and mod.log then mod.log:error("mapamap crash %s: %s", tostring(where), tostring(err)) end end)
+    pcall(function() if io and io.stderr then io.stderr:write("MAPAMAP_CRASH " .. msg .. "\n") end end)
+    pcall(function()
+      if love and love.filesystem and love.filesystem.write then
+        love.filesystem.write("mapamap_crash.log", msg)
+      end
+    end)
+    pcall(function()
+      local dir = (love and love.filesystem and love.filesystem.getSaveDirectory) and love.filesystem.getSaveDirectory() or "."
+      local f = io.open(dir .. "/mapamap_crash.log", "w")
+      if f then f:write(msg); f:close() end
+  end)
+  pcall(function()
+    local f = io.open("mapamap_crash.log", "w")
+    if f then f:write(msg); f:close() end
+  end)
+end
 
-  -- render.hud: draw the overlay on top of the finished frame while active.
+local function run(mod)
   -- Hooks run as (next, game, viewport); draw our overlay and continue the
   -- chain so lower-priority mods and the vanilla no-op still run.
+  local firstDrawLogged = false
   mod.hooks:wrap("render.hud", function(nextFn, game, viewport)
     if active and session then
-      reconcileSession(mod, game)
-      Overlay.draw(session, game, viewport)
+      if not firstDrawLogged then
+        firstDrawLogged = true
+        mod.log:info("mapamap: first overlay draw (gen2=%s)", tostring(Gen.isGen2()))
+      end
+                  reconcileSession(mod, game)
+            local ok, err = xpcall(function()
+                Overlay.draw(session, game, viewport)
+                pcall(session.flushLiveRebuild, session)
+      end, tb)
+      if not ok then logCrash(mod, "render.hud", err) end
+      -- The vanilla world render runs after the overlay.  If it raises (Lua or
+      -- otherwise), Hooks:call re-raises it to the engine and the game hard
+      -- stops with no message.  Catch + log it here so a vanilla-render failure
+      -- becomes a logged error instead of a crash, and we learn the cause.
+            local nok, nerr = pcall(nextFn, game, viewport)
+      if not nok then logCrash(mod, "render.hud.nextFn", nerr) end
+            return
     end
-    if nextFn then return nextFn(game, viewport) end
+    if nextFn then
+      local nok, nerr = pcall(nextFn, game, viewport)
+      if not nok then logCrash(mod, "render.hud.nextFn(inactive)", nerr) end
+      return
+    end
   end, 200)
 
   -- F6 toggles the overlay; while active, keyboard shortcuts are routed to
@@ -321,11 +323,18 @@ local function run(mod)
           closeSession(mod, self); return
         end
       else
-        if key == "f6" then
-          session = openSession(mod, self)
-          if session then
-            active = true
-            Input.reset()
+         if key == "f6" then
+          local ok, err = xpcall(function()
+            session = openSession(mod, self)
+            if session then
+              active = true
+              Input.reset()
+            end
+          end, tb)
+          if not ok then
+            logCrash(mod, "f6-open", err)
+          else
+            mod.log:info("mapamap: F6 open %s (gen2=%s)", session and "OK" or "no-session", tostring(Gen.isGen2()))
           end
           return
         end
@@ -376,6 +385,17 @@ local function run(mod)
     if next(patches) then
       local Data = require("src.core.Data")
       Save.applyPatchesToData(patches, Data)
+      -- Gen 2: maps live on the World, not on Data.  Apply the same patches
+      -- there so the overworld draws edited blocks immediately.
+      if Gen.isGen2() then
+        local ok, Game = pcall(require, "src.core.Game")
+        if ok and Game and Game.state then
+          local world = Game.state.world or Game.state.overworld
+          if world and world.maps then
+            Save.applyPatchesToData(patches, { maps = world.maps })
+          end
+        end
+      end
     end
     -- Replay whole new-map defs.
     local newMaps = mod.save:get("mapamap_new_maps", {})
@@ -384,20 +404,41 @@ local function run(mod)
       for id, def in pairs(newMaps) do
         if not Data.maps[id] then Data.maps[id] = def end
       end
+      -- Gen 2: also inject new maps into the World's map registry.
+      if Gen.isGen2() then
+        local ok, Game = pcall(require, "src.core.Game")
+        if ok and Game and Game.state then
+          local world = Game.state.world or Game.state.overworld
+          if world and world.maps then
+            for id, def in pairs(newMaps) do
+              if not world.maps[id] then world.maps[id] = def end
+            end
+          end
+        end
+      end
     end
     -- Merge extra connections into primary connections so the engine can use them
     local Data = require("src.core.Data")
-    mergeExtraConnections(mod, Data)
+    Connections.mergeExtraConnections(mod, Data)
+    -- Gen 2: also merge on the World's map defs.
+    if Gen.isGen2() then
+      local ok, Game = pcall(require, "src.core.Game")
+      if ok and Game and Game.state then
+        local world = Game.state.world or Game.state.overworld
+        if world and world.maps then
+          Connections.mergeExtraConnections(mod, { maps = world.maps })
+        end
+      end
+    end
     -- Any replayed patch may reference grafted foreign blocks -- grow every
     -- touched tileset's atlas from the live defs before maps rebuild, so a
     -- patched map renders its imports instead of drawing blank cells.
     local Graft = require("mods.mapamap.func.graft")
     Graft.materializeAll(Data)
-    local MapLoader = require("src.world.MapLoader")
-    if MapLoader and MapLoader.invalidateAll then MapLoader.invalidateAll() end
+    Gen.invalidateAll()
   end)
 
-  mod.log:info("mapamap loaded — F6 to paint directly on the overworld")
+  mod.log:info("mapamap loaded - F6 to paint directly on the overworld")
 end
 
 local Main = function(mod)

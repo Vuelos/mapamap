@@ -31,6 +31,8 @@ function State.reset(ui, brush)
   brush.erasing = false
   brush.draggingWarp = false
   brush.paintingMap = nil
+  brush.paintVoidCells = nil
+  brush.pendingMapClick = nil
   brush.lastBlockX = nil
   brush.lastBlockY = nil
   brush.lastCellX = nil
@@ -90,6 +92,8 @@ end
 
 -- Loads the saved inventory collection ({ items, tab, scroll }).  Older saves
 -- from the pre-inventory blueprint book are folded in so no captures are lost.
+-- Template items (New Warp / New Object) are always present at position 1 of
+-- their respective tabs.
 function State.loadInventory(ui, mod)
   local saved = mod.save:get("mapamap_inventory", nil)
   if saved and type(saved) == "table" and type(saved.items) == "table" then
@@ -112,6 +116,42 @@ function State.loadInventory(ui, mod)
       end
     end
   end
+  -- Ensure template items exist and are first in their tabs.
+  local hasNewWarp, hasNewObject = false, false
+  for _, it in ipairs(ui.inventory.items) do
+    if it.kind == "warp" and it.newWarp then hasNewWarp = true end
+    if it.kind == "object" and it.newObject then hasNewObject = true end
+  end
+  local Inventory = require("mods.mapamap.components.inventory")
+  if not hasNewWarp then
+    Inventory.add(ui, { kind = "warp", newWarp = true })
+  end
+  if not hasNewObject then
+    Inventory.add(ui, { kind = "object", newObject = true })
+  end
+  -- Push any existing templates to position 1 of their tabs.
+  local function moveTemplateToFront(kind, flag)
+    for i = #ui.inventory.items, 1, -1 do
+      local it = ui.inventory.items[i]
+      if it.kind == kind and it[flag] then
+        table.remove(ui.inventory.items, i)
+        -- Find first item of the same tab and insert before it
+        local tabIdx = Inventory.tabFor(it)
+        local insertPos = 1
+        for j, other in ipairs(ui.inventory.items) do
+          if Inventory.tabFor(other) == tabIdx then
+            insertPos = j
+            break
+          end
+          insertPos = j + 1
+        end
+        table.insert(ui.inventory.items, insertPos, it)
+        break
+      end
+    end
+  end
+  moveTemplateToFront("warp", "newWarp")
+  moveTemplateToFront("object", "newObject")
 end
 
 return State

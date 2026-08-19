@@ -218,16 +218,27 @@ function Graft.materialize(data, tilesetId)
       for slot, s in pairs(m.srcForSlot) do
         local sData = vanillaImageData(data, s.ts)
         if sData and sData.getPixel then
-          local sw = sData:getWidth()
+          local sw, sh = sData:getDimensions()
           local sPer = math.max(1, sw / 8)
-          local sx = (s.tile % sPer) * 8
-          local sy = math.floor(s.tile / sPer) * 8
-          local dx = (slot % perRow) * 8
-          local dy = math.floor(slot / perRow) * 8
-          for y = 0, 7 do
-            for x = 0, 7 do
-              local r, g, b, a = sData:getPixel(sx + x, sy + y)
-              if gd.setPixel then gd:setPixel(dx + x, dy + y, r, g, b, a) end
+          local sCount = (sw / 8) * (sh / 8)
+          -- The source tile id must sit inside the source tileset's atlas;
+          -- a corrupt or mismatched graft can reference a slot past the end of
+          -- the atlas.  Reading it would make the ImageData getPixel call go
+          -- out of bounds (LÖVE raises, which aborts the whole materialize
+          -- and breaks every tileset using this atlas).  Skip such slots so a
+          -- single bad graft can never take down the renderer.
+          if s.tile < 0 or s.tile >= sCount then
+            target._graftSkipped = (target._graftSkipped or 0) + 1
+          else
+            local sx = (s.tile % sPer) * 8
+            local sy = math.floor(s.tile / sPer) * 8
+            local dx = (slot % perRow) * 8
+            local dy = math.floor(slot / perRow) * 8
+            for y = 0, 7 do
+              for x = 0, 7 do
+                local r, g, b, a = sData:getPixel(sx + x, sy + y)
+                if gd.setPixel then gd:setPixel(dx + x, dy + y, r, g, b, a) end
+              end
             end
           end
         end

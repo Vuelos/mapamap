@@ -42,8 +42,8 @@ local function inventoryCellCentre(i)
   local ci = i - 1
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
-  return px + Inventory.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
-         py + Inventory.PAD + Inventory.TAB_H + Inventory.GAP
+  return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
+         py + Panel.PAD + Panel.TAB_H + Inventory.GAP
             + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
 end
 
@@ -92,7 +92,7 @@ function test_tabAt_fit()
   local x, y, _, _ = Inventory.rect(VW, VH)
   -- The tab row starts at py + PAD; the trim above it is panel padding.
   assert(Inventory.tabAt(VW, VH, x + 2, y + 2) == nil, "top padding sits above the tab row")
-  assert(Inventory.tabAt(VW, VH, x + Inventory.PAD, y + Inventory.PAD) == 1,
+  assert(Inventory.tabAt(VW, VH, x + Panel.PAD, y + Panel.PAD) == 1,
     "first tab spans the tab-row origin")
   local tx, ty = tabCentre(3)
   assert(Inventory.tabAt(VW, VH, tx, ty) == 3, "third tab hit-tests")
@@ -111,15 +111,15 @@ function test_tabRectTextFit()
   assert(w2 > w1, "Objects is wider than Tiles")
   assert(w3 == w1, "Warps and Tiles are the same length")
   assert(w4 > w2, "Blueprints is the widest tab")
-  assert(x2 == x1 + w1 + Inventory.TAB_GAP, "tab 2 starts one gap after tab 1")
-  assert(x3 == x2 + w2 + Inventory.TAB_GAP, "tab 3 starts one gap after tab 2")
+  assert(x2 == x1 + w1 + Panel.TAB_GAP, "tab 2 starts one gap after tab 1")
+  assert(x3 == x2 + w2 + Panel.TAB_GAP, "tab 3 starts one gap after tab 2")
   assert(x4 > x3 + w3, "tab 4 starts after tab 3")
   -- Hit-testing agrees with the per-text rects.
   local px, py = Inventory.rect(VW, VH)
-  local ty = py + Inventory.PAD + Inventory.TAB_H / 2
+  local ty = py + Panel.PAD + Panel.TAB_H / 2
   assert(Inventory.tabAt(VW, VH, x4 + w4 / 2, ty, fakeFont) == 4,
     "Blueprints hit-tests inside its own button")
-  assert(Inventory.tabAt(VW, VH, x2 + w2 + Inventory.TAB_GAP / 2, ty, fakeFont) == nil,
+  assert(Inventory.tabAt(VW, VH, x2 + w2 + Panel.TAB_GAP / 2, ty, fakeFont) == nil,
     "the gap between tabs hit-tests as nothing")
 end
 

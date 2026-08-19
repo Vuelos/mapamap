@@ -4,6 +4,7 @@
 local Fill = require("mods.mapamap.func.fill")
 local Common = require("mods.mapamap.func.common")
 local Snapshot = require("mods.mapamap.func.snapshot")
+local Gen = require("mods.mapamap.func.gen")
 local CELL_PX = Common.CELL_PX
 local BLOCK_PX = Common.BLOCK_PX
 
@@ -172,9 +173,9 @@ end
 local function rebuildFor(self, mapId)
   if mapId then
     local m = self.neighborMaps and self.neighborMaps[mapId]
-    if m and m.renderer then m.renderer:rebuild() end
+    Gen.rebuildRenderer(m)
   else
-    self.map.renderer:rebuild()
+    Gen.rebuildRenderer(self.map)
   end
 end
 
@@ -381,12 +382,12 @@ function MapOps.revertBlock(self)
        if idx >= 1 and idx <= #def.blocks then
          local oldVal = def.blocks[idx]
          local newVal = snap.blocks[oby * snap.width + obx + 1]
-         if oldVal ~= newVal then
-           if self.undo then self.undo:capture(def, self.expandShiftL, self.expandShiftT, nil, {idx}, {oldVal}) end
-           def.blocks[idx] = newVal
-           self.mapChanged = true
-           self.map.renderer:rebuild()
-         end
+          if oldVal ~= newVal then
+            if self.undo then self.undo:capture(def, self.expandShiftL, self.expandShiftT, nil, {idx}, {oldVal}) end
+            def.blocks[idx] = newVal
+            self.mapChanged = true
+            Gen.rebuildRenderer(self.map)
+          end
        end
      end
      return
@@ -478,10 +479,10 @@ function MapOps.restoreSnapshot(self, kind)
   self.mapH = self.def.height * BLOCK_PX
   if mapId then
     local m = self.neighborMaps and self.neighborMaps[mapId]
-    if m and m.renderer then m.renderer:rebuild() end
+    Gen.rebuildRenderer(m)
   else
     self:reloadMap()
-    self.map.renderer:rebuild()
+    Gen.rebuildRenderer(self.map)
     -- The undo may have restored a different connection layout; re-derive
     -- the neighbor set and re-capture its originals.
     self:rebuildNeighbors()

@@ -21,6 +21,14 @@ function Connections.connectionsOn(def, dir)
   local function add(conn)
     if not conn or seen[conn] then return end
     seen[conn] = true
+    -- Gen 2 extractions may carry a numeric `map` field alongside (or instead
+    -- of) the string `mapId`.  The data.maps registry is keyed by the string
+    -- id, so always prefer `mapId` when present to ensure lookups like
+    -- `maps[conn.map]` resolve correctly.  Conversely, mapamap-created
+    -- connections set `map` but may lack `mapId`; the Gen 2 runtime checks
+    -- `conn.mapId` for traversal, so propagate the other way too.
+    if conn.mapId then conn.map = conn.mapId
+    elseif conn.map then conn.mapId = conn.map end
     list[#list + 1] = conn
   end
 
@@ -38,11 +46,11 @@ function Connections.connectionsOn(def, dir)
   end
 
   table.sort(list, function(a, b)
-    local ao = a and a.offset or 0
-    local bo = b and b.offset or 0
+    local ao = tonumber(a and a.offset) or 0
+    local bo = tonumber(b and b.offset) or 0
     if ao == bo then
-      local am = a and (a.map or a.mapId) or ""
-      local bm = b and (b.map or b.mapId) or ""
+      local am = tostring(a and (a.map or a.mapId) or "")
+      local bm = tostring(b and (b.map or b.mapId) or "")
       return am < bm
     end
     return ao < bo
@@ -55,10 +63,18 @@ end
 -- stays as one element, while a merged/array form is flattened in place.
 function Connections.connectionList(value)
   if not value then return {} end
-  if value.map then return { value } end
+  if value.map or value.mapId then
+    if value.mapId then value.map = value.mapId
+    elseif value.map then value.mapId = value.map end
+    return { value }
+  end
   if type(value) == "table" then
     local out = {}
-    for _, conn in ipairs(value) do out[#out + 1] = conn end
+    for _, conn in ipairs(value) do
+      if conn.mapId then conn.map = conn.mapId
+      elseif conn.map then conn.mapId = conn.map end
+      out[#out + 1] = conn
+    end
     return out
   end
   return {}
@@ -74,7 +90,7 @@ end
 function Connections.addConnection(def, otherDef, dir, offset, span)
   span = span or 0
   local wire = function(from, to, d, off, sp)
-    local conn = { map = to.id, offset = off }
+    local conn = { map = to.id, mapId = to.id, offset = off }
     if sp and sp > 0 then conn.size = sp end
 
     if not from.connections then from.connections = {} end
@@ -114,6 +130,60 @@ function Connections.addConnection(def, otherDef, dir, offset, span)
   end
   wire(def, otherDef, dir, offset, span)
   wire(otherDef, def, recip[dir], -offset, span)
+end
+
+-- Merges connectionsExtra into connections so the engine can use extra
+-- connections during neighbor computation. Extra connections are stored in
+-- connectionsExtra[dir] as an array; this function makes them visible to the
+-- engine by merging them with the primary connection in connections[dir].
+function Connections.mergeExtraConnections(mod, data)
+  if not data or not data.maps then return end
+  for mapId, def in pairs(data.maps) do
+    if def.connectionsExtra then
+      if not def.connections then def.connections = {} end
+      for dir, extras in pairs(def.connectionsExtra) do
+        if extras and #extras > 0 then
+          local merged = {}
+          local primary = def.connections[dir]
+          if primary then
+            for _, conn in ipairs(Connections.connectionList(primary)) do
+              merged[#merged + 1] = conn
+            end
+          end
+          for i = 1, #extras do
+            merged[#merged + 1] = extras[i]
+          end
+          table.sort(merged, function(a, b)
+            local ao = tonumber(a and a.offset) or 0
+            local bo = tonumber(b and b.offset) or 0
+            if ao == bo then
+              local am = tostring(a and a.map or "")
+              local bm = tostring(b and b.map or "")
+              return am < bm
+            end
+            return ao < bo
+          end)
+          if #merged == 1 then
+            def.connections[dir] = merged[1]
+          elseif #merged > 1 then
+            def.connections[dir] = merged
+          end
+          local entries = {}
+          for _, conn in ipairs(merged) do
+            entries[#entries + 1] = string.format("%s@%s", tostring(conn.map), tostring(conn.offset or 0))
+          end
+          mod.log:info("mapamap debug: merged %d extra connection(s) on %s.%s -> %s",
+            #extras, mapId, dir, table.concat(entries, ", "))
+          mod.log:info("mapamap: merged %d extra connection(s) on %s.%s",
+            #extras, mapId, dir)
+        end
+      end
+    end
+  end
+end
+
+--Placeholder for runtime forced updatte of connections
+function Connections.runtimeUpdate()
 end
 
 return Connections

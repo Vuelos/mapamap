@@ -31,9 +31,19 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
 
   if item.kind == "blueprint" then
     local bp = item
-    if not bp or not bp.w or not bp.h or not bp.tiles or #bp.tiles == 0
-       or not r or not r.image then return false end
-    local image, quads = r.image, r.quads
+    if not bp or not bp.w or not bp.h or not bp.tiles or #bp.tiles == 0 then
+      return false
+    end
+    local image, quads, aliasMap
+    if r and r.image then
+      image, quads, aliasMap = r.image, r.quads, r.aliasMap
+    elseif session.tileset and session.thumbnailBundle then
+      local bundle = session:thumbnailBundle(session.tileset)
+      if bundle and bundle.image then
+        image, quads, aliasMap = bundle.image, bundle.quads, bundle.aliasMap
+      end
+    end
+    if not image then return false end
     local block = session.tileset and session.tileset.blocks
     local maxDim = math.max(bp.w, bp.h, 1)
     local thumbCell = math.max(1, math.floor(boxSize / maxDim))
@@ -55,7 +65,7 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
             for cc = 0, 3 do
               local ci = rr * 4 + cc + 1
               local tile = b[ci]
-              local remap = r.aliasMap and r.aliasMap[bid]
+              local remap = aliasMap and aliasMap[bid]
               if remap and remap[ci - 1] then tile = remap[ci - 1] end
               local quad = quads[tile]
               if quad then love.graphics.draw(image, quad, bx + cc * TILE_PX, by + rr * TILE_PX) end
@@ -78,6 +88,11 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
       local tsDef = session.data and session.data.tilesets and session.data.tilesets[srcts]
       local thumb = session.thumbnailBundle
       if tsDef and thumb then bundle = thumb(session, tsDef) end
+    end
+    if not bundle and not tileset and not r then
+      if session.tileset and session.thumbnailBundle then
+        bundle = session:thumbnailBundle(session.tileset)
+      end
     end
     if not r and not bundle then return false end
     local image, quads, aliasMap, blocksTable
@@ -148,7 +163,7 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
     -- the entity-marker style used in the world overlay (blue = warp).  The
     -- "new warp" template cell draws a green plus so it reads as a builder.
     if item.newWarp then
-      love.graphics.setColor(0.2, 0.8, 0.35, 0.7 * A)
+      love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
       love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
       love.graphics.setColor(1, 1, 1, 0.9 * A)
       love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,

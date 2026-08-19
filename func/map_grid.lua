@@ -482,9 +482,30 @@ function MapGrid.createForBlocks(self, bx0, by0, bw, bh)
   return nil
 end
 
--- Thin wrapper: create a 1×1 map containing the single block at (bx,by).
+-- Thin wrapper: create a host-sized map on the void containing the single
+-- block at (bx,by), sized like the existing maps rather than the painted cell.
 function MapGrid.createForPaint(self, bx, by)
-  return MapGrid.createForBlocks(self, bx, by, 1, 1)
+  return MapGrid.createLikeNeighbor(self, bx, by)
+end
+
+-- Paint-time void creation sized like the existing maps: finds the host-sized
+-- candidate void (per MapGrid.candidates, which derives its footprint from the
+-- laid-out map bodies / seam gaps -- not the painted blocks) that contains the
+-- painted block, and creates it with full-seam connections.  Returns the new id
+-- or nil when no host-sized void contains the block.
+function MapGrid.createLikeNeighbor(self, bx, by)
+  if not (self and self.data and self.data.maps) then return nil end
+  local depth = self.DEFAULT_DEPTH or 1
+  local caps = MapGrid.candidates(self, depth)
+  local best
+  for _, c in ipairs(caps) do
+    if bx >= c.bx and by >= c.by
+       and bx < c.bx + c.w and by < c.by + c.h then
+      if not best or c.conns > best.conns then best = c end
+    end
+  end
+  if not best then return nil end
+  return MapGrid.createMap(self, best.bx, best.by, best.w, best.h)
 end
 
 return MapGrid

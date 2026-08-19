@@ -1,11 +1,10 @@
 -- Neighbor management and map switching for the editor screen.
 
 local Neighbors = require("mods.mapamap.func.neighbors")
-local MapLoader = require("src.world.MapLoader")
+local Gen = require("mods.mapamap.func.gen")
 local Snapshot = require("mods.mapamap.func.snapshot")
 local Common = require("mods.mapamap.func.common")
 local Undo = require("mods.mapamap.func.undo")
-local TileRenderer = require("src.render.TileRenderer")
 local PaletteFX = require("src.render.PaletteFX")
 local FieldDefaults = require("src.world.FieldDefaults")
 local BLOCK_PX = Common.BLOCK_PX
@@ -16,8 +15,8 @@ local EditorNeighbors = {}
 function EditorNeighbors.rebuildNeighbors(self)
   local list, byId = {}, {}
   for _, n in ipairs(Neighbors.compute(self.data.maps, self.mapId, 2)) do
-    local ok, m = pcall(MapLoader.load, self.data, n.id)
-    if ok and m and m.renderer and m.def then
+    local m = Gen.loadMap(self.data, n.id)
+    if m and m.def then
       byId[n.id] = m
       table.insert(list, {
         id = n.id, ox = n.ox, oy = n.oy,
@@ -171,7 +170,7 @@ function EditorNeighbors.switchToMap(self, nb)
     self.selectedBlock = math.max(0, math.min(#self.tileset.blocks - 1, self.selectedBlock))
   end
   self:injectTextDefs()
-  TileRenderer.tick(0)
+  Gen.tickAnim(0)
 
   self:rebuildNeighbors()
 
@@ -180,7 +179,7 @@ function EditorNeighbors.switchToMap(self, nb)
   self.originalEncounters = Common.deepCopy(self._sessionEncounters[nb.id])
   self.paletteList = {}
   for i = 1, #self.tileset.blocks do self.paletteList[i] = i - 1 end
-  if self.map.renderer then self.map.renderer:rebuild() end
+  Gen.rebuildRenderer(self.map)
 
   self.mapChanged = pendingEdits
   if self.mapChanged then self._sessionDirty[nb.id] = true end

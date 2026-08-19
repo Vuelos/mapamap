@@ -14,7 +14,7 @@ local Snapshot = require("mods.mapamap.func.snapshot")
 local Undo = require("mods.mapamap.func.undo")
 local Save = require("mods.mapamap.func.save")
 local Graft = require("mods.mapamap.func.graft")
-local TileRenderer = require("src.render.TileRenderer")
+local Gen = require("mods.mapamap.func.gen")
 local PaletteFX = require("src.render.PaletteFX")
 
 local Session = {}
@@ -66,20 +66,47 @@ local function mixin(t, src) for k, v in pairs(src) do t[k] = v end end
 mixin(Session, require("mods.mapamap.func.map_ops"))
 mixin(Session, require("mods.mapamap.func.editor_neighbors"))
 mixin(Session, require("mods.mapamap.func.warps"))
+mixin(Session, require("mods.mapamap.func.encounters"))
+mixin(Session, require("mods.mapamap.func.objects"))
+
+-- Creates a session editing `mapId`.  Returns the session or nil when the
+-- The object the engine hands the mod as `game` is not the Game singleton (it
+-- has no `.overworld`).  Gen 2 splits the data registry: the non-map tables
+-- (palettes, field, ...) live on `game.data`, while maps/tilesets live on the
+-- live World (`game.world`).  Merge them into one registry so Session.new,
+-- PaletteFX, etc. all find what they expect.  Gen 1's `game.data` already holds
+-- the full registry, so the merge is a harmless copy there.
+local function resolveData(game)
+  local d = game and game.data
+  local ok, w = pcall(Gen.overworld, game)
+  local world = ok and w
+  -- Build merged from all available sources.
+  local merged = {}
+  if d then for k, v in pairs(d) do merged[k] = v end end
+  if world then
+    merged.maps = world.maps or merged.maps
+    merged.tilesets = world.tilesets or merged.tilesets
+  end
+  if merged.maps then return merged end
+  -- Last resort: the canonical data singleton (Gen 1 path).
+  local Data = require("src.core.Data")
+  if Data and Data.maps then return Data end
+  return merged
+end
 
 -- Creates a session editing `mapId`.  Returns the session or nil when the
 -- map or its tileset cannot be loaded.
 function Session.new(mod, game, mapId)
-  local data = game.data
+  local data = resolveData(game)
+  if not (data and data.maps) then return nil end
   activeData = data
   local def = data.maps[mapId]
   if not def then return nil end
   local tileset = data.tilesets[def.tileset]
   if not tileset then return nil end
 
-  local MapLoader = require("src.world.MapLoader")
-  local ok, map = pcall(MapLoader.load, data, mapId)
-  if not ok or not map or not map.renderer then return nil end
+  local map = Gen.loadMap(data, mapId)
+  if not map then return nil end
 
   local self = {
     mod = mod, game = game, data = data,
@@ -121,30 +148,7 @@ end
 function Session:refreshAfterLoad()
   self:rebuildNeighbors()
   self:storeOriginal()
-  if self.map and self.map.renderer then self.map.renderer:rebuild() end
-end
-
--- Rebuilds the overworld's live NPC list for the current map from def.objects
--- (the same source the engine reads on map enter), so a just-placed or removed
--- object appears immediately instead of waiting for the next map enter.  No-op
--- when the visible map isn't the session's, or the world has no npc pool
--- helper.
-function Session:refreshObjects()
-  local ow = self.game and self.game.overworld
-  if not (ow and ow.map and ow.map.id == self.mapId) then return false end
-  local fn = ow.pooledNPC
-  if not fn then return false end
-  ow.npcs = {}
-  for _, obj in ipairs(self.def.objects or {}) do
-    local npc = fn(ow.npcPool, self.data, self.mapId, obj)
-    npc.frozen = false
-    table.insert(ow.npcs, npc)
-  end
-  if ow.player then
-    ow.entities = { ow.player }
-    for _, n in ipairs(ow.npcs) do table.insert(ow.entities, n) end
-  end
-  return true
+  Gen.rebuildRenderer(self.map)
 end
 
 -- Force the renderers the PLAYER actually sees to rebuild so an edit shows up
@@ -154,13 +158,22 @@ end
 -- overworld map + neighbor renderers too guarantees the screen updates at
 -- once instead of waiting for the next map enter.
 function Session:refreshLiveRenderers()
-  local ow = self.game and self.game.overworld
+  local ow = self.game and Gen.overworld(self.game)
+  if Gen.isGen2() then
+    -- Gen 2: the World manages its own baked canvas images.  Dropping the
+    -- map's cached canvas and the neighbor strip images forces a rebake on
+    -- the next draw.  refreshMapImages handles the current map; for
+    -- non-current maps dropMapImages is enough.
+    --
+    -- CRITICAL: this bake must NOT run inside the keypress/open/mouse event.
+    -- World:rebuildNeighbors bakes neighbor strip canvases (World:imageFor)
+    -- and doing that during the input event hard-crashes on Gen 2 with no
+    -- Lua error log.  Defer it to the draw frame via _needsLiveRebuild; the
+    -- render.hud hook calls flushLiveRebuild() every frame.
+    self._needsLiveRebuild = true
+    return
+  end
   local MapLoader = require("src.world.MapLoader")
-  -- Rebuild the instance the overworld is ACTUALLY drawing, not just the
-  -- cached one.  After MapLoader.invalidateAll the cached entry may be a
-  -- fresh object while ow.map still references the pre-invalidate instance
-  -- it sits on, so rebuilding only `cached(id)`'s renderer would miss the
-  -- one on screen (edits would wait for a re-enter before showing).
   if ow and ow.map and ow.map.renderer then
     ow.map.renderer:rebuild()
     local live = MapLoader.cached(ow.map.id)
@@ -175,7 +188,57 @@ function Session:refreshLiveRenderers()
       end
     end
   end
-  if self.map and self.map.renderer then self.map.renderer:rebuild() end
+  Gen.rebuildRenderer(self.map)
+end
+
+-- Flushes a deferred live-World rebake (set by refreshLiveRenderers on Gen 2).
+-- Called from the render.hud hook in the DRAW frame, never from an input event.
+--
+-- On Gen 1, drops cached images and rebuilds neighbor canvases immediately.
+-- On Gen 2, dropMapImages + imageFor are safe (they just clear/re-bake cache
+-- entries).  rebuildNeighbors hard-crashes on Gen 2 (C-level fault inside the
+-- neighbor strip baker), so we avoid it entirely: drop + re-bake the current
+-- map and any dirty neighbors individually instead of recomputing the full
+-- neighbor list.
+function Session:flushLiveRebuild()
+  if not self._needsLiveRebuild then return end
+  self._needsLiveRebuild = false
+  local ow = self.game and Gen.overworld(self.game)
+  if not ow then return end
+
+  if not Gen.isGen2() then
+    if ow.dropMapImages then
+      pcall(ow.dropMapImages, ow, self.mapId)
+      for nbId in pairs(self.neighborDirty or {}) do
+        pcall(ow.dropMapImages, ow, nbId)
+      end
+    end
+    if ow.rebuildNeighbors then pcall(ow.rebuildNeighbors, ow) end
+    return
+  end
+
+  -- Gen 2 path: re-bake current map + dirty neighbors without rebuildNeighbors.
+  -- dropMapImages clears the cache; imageFor re-bakes from the live def.blocks.
+  if ow.dropMapImages then
+    pcall(ow.dropMapImages, ow, self.mapId)
+  end
+  if ow.imageFor then
+    local ok, img = pcall(ow.imageFor, ow, self.mapId)
+    if ok and img then ow.mapImage = img end
+  end
+  -- Update dirty neighbor images in place so their canvases stay current
+  -- without recomputing the full neighbor list.
+  if ow.imageFor and ow.neighbors then
+    for nbId in pairs(self.neighborDirty or {}) do
+      if ow.dropMapImages then pcall(ow.dropMapImages, ow, nbId) end
+      local ok, img = pcall(ow.imageFor, ow, nbId)
+      if ok and img then
+        for _, nb in ipairs(ow.neighbors) do
+          if nb.id == nbId then nb.image = img; break end
+        end
+      end
+    end
+  end
 end
 
 -- Full renderer reload for the tileset whose grown atlas a graft just
@@ -184,20 +247,28 @@ end
 -- and any overworld instance / neighbor strips) so the grown atlas is
 -- re-derived from the updated defs on the next build.
 function Session:reloadGraftedRenderers()
-  local MapLoader = require("src.world.MapLoader")
   Graft.invalidateTileset(self.data, self.tileset.id)
   Graft.materialize(self.data, self.tileset.id)
+  Gen.invalidateAtlasCache()
   self._thumbBundles = {}
+  if Gen.isGen2() then
+    -- Gen 2: rebuild the Map instance so its block data is current, then defer
+    -- the baked-canvas drop/neighbour rebake to the draw frame (World bakes
+    -- canvases and crash inside the keypress/open/mouse event on Gen 2).
+    local Map2 = require("src.world.gen2.Map")
+    self.map = Map2.new(self.def, self.tileset)
+    self._needsLiveRebuild = true
+    return
+  end
+  local MapLoader = require("src.world.MapLoader")
   -- The session's own cached Map is reloaded so its TileRenderer is rebuilt
   -- against the new grown atlas.
-  if self.map then
-    MapLoader.invalidate(self.mapId)
-    self.map = MapLoader.load(self.data, self.mapId)
-    if self.map and self.map.renderer then self.map.renderer:rebuild() end
-  end
+  MapLoader.invalidate(self.mapId)
+  self.map = MapLoader.load(self.data, self.mapId)
+  if self.map and self.map.renderer then self.map.renderer:rebuild() end
   -- The overworld may hold a different Map instance for this tileset; swap it
   -- for a fresh one right away so the player sees the graft immediately.
-  local ow = self.game and self.game.overworld
+  local ow = self.game and Gen.overworld(self.game)
   if ow and ow.map and ow.map.tileset == self.tileset then
     local m = MapLoader.load(self.data, ow.map.id)
     if m and m.renderer then
@@ -224,14 +295,8 @@ function Session:thumbnailBundle(tsDef)
   if not self._thumbBundles then self._thumbBundles = {} end
   local b = self._thumbBundles[key]
   if b ~= nil then return b end
-  local mini = { tileset = tsDef, def = { width = 1, height = 1 }, id = tid }
-  local ok, r = pcall(TileRenderer.new, mini, self.data)
-  if not ok or not r or not r.image or not r.quads then
-    self._thumbBundles[key] = false
-    return nil
-  end
-  b = { image = r.image, quads = r.quads, aliasMap = r.aliasMap, blocks = tsDef.blocks }
-  self._thumbBundles[key] = b
+  b = Gen.thumbnailBundle(self, tsDef)
+  self._thumbBundles[key] = b or false
   return b
 end
 
@@ -241,10 +306,9 @@ end
 -- re-points the Map instance and refreshes originals).  Used by undo/redo
 -- restores when the edited map's body changed.
 function Session:reloadMap()
-  local MapLoader = require("src.world.MapLoader")
-  MapLoader.invalidate(self.mapId)
-  self.map = MapLoader.load(self.data, self.mapId)
-  if self.map and self.map.renderer then self.map.renderer:rebuild() end
+  Gen.invalidateMap(self.data, self.mapId)
+  self.map = Gen.loadMap(self.data, self.mapId)
+  Gen.rebuildRenderer(self.map)
   self:storeOriginal()
 end
 
@@ -255,15 +319,9 @@ end
 -- the editor's hit-testing set and the live drawn set.
 function Session:rebuildWorldNeighbors()
   self:rebuildNeighbors()
-  local ow = self.game and self.game.overworld
-  if not (ow and ow.rebuildNeighbors) then
-    self:refreshLiveRenderers()
-    return
-  end
-  -- ow.rebuildNeighbors reloads neighbors via MapLoader.load, which builds a
-  -- fresh instance for the brand-new map id (nothing cached it yet), so the
-  -- drawn set picks up the new body immediately.
-  local ok = pcall(ow.rebuildNeighbors, ow)  if not ok then self:refreshLiveRenderers() end
+  -- refreshLiveRenderers pcall-guards the per-generation World bake, so a
+  -- baker failure (Gen 2) cannot hard-crash the game -- this runs from the
+  -- open/keypress path, outside the normal update/draw cycle.
   self:refreshLiveRenderers()
 end
 
@@ -271,91 +329,10 @@ end
 -- the overlay was open, or the loader cache dropped the instance).
 function Session:assertResolvable()
   if self.map and self.map.def then return true end
-  local MapLoader = require("src.world.MapLoader")
-  local ok, m = pcall(MapLoader.load, self.data, self.mapId)
-  if not ok or not m then return false end
+  local m = Gen.loadMap(self.data, self.mapId)
+  if not m then return false end
   self.map = m
   return true
-end
-
--- Places a simple NPC object (no script/dialog) at the current cursor cell and
--- marks the map changed.  Returns true when placed.
-function Session:placeSprite(spriteId)
-  if not spriteId or spriteId == "" then return false end
-  if not self.data.sprites or not self.data.sprites[spriteId] then return false end
-  -- Object coordinates are walk-grid cells (px = x*16), so the cursor cell
-  -- maps 1:1.
-  local tx = self.cursorBx
-  local ty = self.cursorBy
-  local def = self.def
-  if tx < 0 or ty < 0 or tx >= def.width * 2 or ty >= def.height * 2 then return false end
-  def.objects = def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
-  table.insert(def.objects, {
-    x = tx, y = ty,
-    sprite = spriteId,
-    index = maxIndex + 1,
-    object_type = "NPC",
-    isTrainer = false,
-    trainerClass = nil,
-    script = nil,
-    item = nil,
-  })
-  self.mapChanged = true
-  self:refreshLiveRenderers()
-  self:refreshObjects()
-  return true
-end
-
--- Places a simple item object (no ball/hidden flag) at the cursor cell and
--- marks the map changed.  Returns true when placed.
-function Session:placeItem(itemId)
-  if not itemId or itemId == "" then return false end
-  if not self.data.items or not self.data.items[itemId] then return false end
-  local def = self.def
-  local tx = self.cursorBx
-  local ty = self.cursorBy
-  if tx < 0 or ty < 0 or tx >= def.width * 2 or ty >= def.height * 2 then return false end
-  def.objects = def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
-  table.insert(def.objects, {
-    x = tx, y = ty,
-    sprite = nil,
-    index = maxIndex + 1,
-    object_type = "item",
-    item = itemId,
-    isTrainer = false,
-    script = nil,
-  })
-  self.mapChanged = true
-  self:refreshLiveRenderers()
-  self:refreshObjects()
-  return true
-end
-
--- Removes an NPC/object at the cursor cell.  Returns true when one was found.
-function Session:eraseObjectsAtCell()
-  local tx = self.cursorBx
-  local ty = self.cursorBy
-  local def = self.def
-  local list = def.objects or {}
-  for i = #list, 1, -1 do
-    local o = list[i]
-    if o and o.x == tx and o.y == ty then
-      table.remove(list, i)
-      self.mapChanged = true
-      self:refreshLiveRenderers()
-      self:refreshObjects()
-      return true
-    end
-  end
-  return false
 end
 
 -- Applies the mod's saved patches for the edited map to the live data, then
@@ -430,8 +407,7 @@ function Session:adoptNewMap(newId)
   local data = self.data
   local newDef = data.maps[newId]
   local tileset = data.tilesets[newDef.tileset]
-  local MapLoader = require("src.world.MapLoader")
-  local m = MapLoader.load(data, newId)
+  local m = Gen.loadMap(data, newId)
   self.mapId = newId
   self.def = newDef
   self.tileset = tileset
@@ -470,110 +446,21 @@ local function cellIn(def, x, y)
   return x >= 0 and y >= 0 and x < def.width * 2 and y < def.height * 2
 end
 
--- The object at a walk-grid cell on the edited map, or nil.
-function Session:objectAt(cellX, cellY)
-  for _, o in ipairs(self.def.objects or {}) do
-    if (o.x or -1) == cellX and (o.y or -1) == cellY then return o end
-  end
-  return nil
-end
-
--- A display name for an object (the item id, sprite id, or its label).
-function Session:objectName(obj)
-  if not obj then return "" end
-  if obj.label and obj.label ~= "" then return obj.label end
-  if obj.object_type == "item" then return obj.item or "item" end
-  return obj.sprite or "object"
-end
-
--- Places a deep copy of `sample` at the cell as a new object (the "copy an
--- object from the map" tool).  Returns the new object or nil.
-function Session:placeObjectCopy(cellX, cellY, sample)
-  if not cellIn(self.def, cellX, cellY) then return nil end
-  if not (sample and sample.object_type) then return nil end
-  if self.undo then self.undo:capture(self.def) end
-  self.def.objects = self.def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(self.def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
-  local copy = {}
-  for k, v in pairs(sample) do copy[k] = v end
-  copy.x, copy.y = cellX, cellY
-  copy.index = maxIndex + 1
-  table.insert(self.def.objects, copy)
+-- Renames a laid-out map (the edited map or any loaded neighbor).  The name is
+-- what the border overlay draws as the map's chip, and it is diff-persisted
+-- (tracked field) when the map is a loaded neighbor.
+function Session:setMapName(mapId, name)
+  if not mapId then return false end
+  local def = (mapId == self.mapId) and self.def or (self.data.maps[mapId])
+  if not def then return false end
+  if self.undo then self.undo:capture(def) end
+  def.name = name
   self.mapChanged = true
-  self:refreshLiveRenderers()
-  self:refreshObjects()
-  return copy
-end
-
--- Places a fresh simple NPC at the cell (the "New Object" template tool),
--- using the first sprite in the engine's sprite table so the object is
--- immediately visible; the name is editable via the Details panel.  Returns
--- the new object or nil when no sprite exists to render with.
-function Session:placeNewObject(cellX, cellY)
-  if not cellIn(self.def, cellX, cellY) then return nil end
-  local spriteId
-  for id in pairs(self.data.sprites or {}) do spriteId = id; break end
-  if not spriteId then return nil end
-  if self.undo then self.undo:capture(self.def) end
-  self.def.objects = self.def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(self.def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
+  if mapId ~= self.mapId then
+    self.neighborDirty = self.neighborDirty or {}
+    self.neighborDirty[mapId] = true
   end
-  table.insert(self.def.objects, {
-    x = cellX, y = cellY,
-    sprite = spriteId,
-    index = maxIndex + 1,
-    object_type = "NPC",
-    isTrainer = false,
-    trainerClass = nil,
-    script = nil,
-    item = nil,
-    label = "New Object",
-  })
-  self.mapChanged = true
-  self:refreshLiveRenderers()
-  self:refreshObjects()
-  return self.def.objects[#self.def.objects]
-end
-
--- Moves an existing object to a cell.
-function Session:moveObject(obj, cellX, cellY)
-  if not obj then return false end
-  if not cellIn(self.def, cellX, cellY) then return false end
-  if self.undo then self.undo:capture(self.def) end
-  obj.x, obj.y = cellX, cellY
-  self.mapChanged = true
-  self:refreshObjects()
   return true
-end
-
--- Sets an object's display label.
-function Session:setObjectLabel(obj, label)
-  if not obj then return false end
-  if self.undo then self.undo:capture(self.def) end
-  obj.label = label
-  self.mapChanged = true
-  return true
-end
-
--- Removes an object from the edited map.
-function Session:removeObject(obj)
-  local list = self.def.objects or {}
-  for i = #list, 1, -1 do
-    if list[i] == obj then
-      if self.undo then self.undo:capture(self.def) end
-      table.remove(list, i)
-      self.mapChanged = true
-      self:refreshLiveRenderers()
-      self:refreshObjects()
-      return true
-    end
-  end
-  return false
 end
 
 -- Every unique block id painted on the edited map as placement-tool cells

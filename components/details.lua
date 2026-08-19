@@ -10,12 +10,11 @@
 -- inventory's right, drawn only while Input.details is open.
 
 local Inventory = require("mods.mapamap.components.inventory")
+local Panel = require("mods.mapamap.components.panel")
 local Text = require("mods.mapamap.components.text")
+local Objects = require("mods.mapamap.func.objects")
 
 local Details = {}
-
-Details.PAD = 8
-Details.ROW_H = 24
 
 -- The panel is the inventory's equal-sized side panel (the picker's spot; the
 -- picker is closed while details are open).
@@ -25,17 +24,16 @@ end
 
 -- True when a screen point is inside the details panel.
 function Details.over(vw, vh, mx, my)
-  local x, y, w, h = Details.rect(vw, vh)
-  return mx >= x and mx < x + w and my >= y and my < y + h
+  return Panel.over(Details.rect, vw, vh, mx, my)
 end
 
 -- The field index whose row a screen point is over (mouse hover / click), or
 -- nil.  Rows mirror the keyboard's field list.
 function Details.hit(vw, vh, mx, my)
   local x, y, w, h = Details.rect(vw, vh)
-  if mx < x or mx >= x + w or my < y or my >= y + h then return nil end
-  local rowY = y + Details.PAD + 20
-  local n = math.floor((my - rowY) / (Details.ROW_H + 6)) + 1
+  if mx < x or mx >= x + w or my >= y or my >= y + h then return nil end
+  local rowY = y + Panel.PAD + 20
+  local n = math.floor((my - rowY) / (Panel.ROW_H + 6)) + 1
   if n < 1 then return nil end
   return n
 end
@@ -52,7 +50,14 @@ function Details.build(session, target)
     fields[#fields + 1] = { key = key, label = label, value = value,
                             type = kind or "text" }
   end
-  if target and target.warp then
+  if target and target.map then
+    local def = target.map
+    add("name", "Name", (def and def.name) or target.mapId or "", "text")
+    add("id", "Map ID", target.mapId or "-", "readonly")
+    add("size", "Size", (def and def.width and def.height)
+      and (def.width .. "x" .. def.height) or "-", "readonly")
+    add("encounters", "Encounters", "", "action")
+  elseif target and target.warp then
     local w = target.warp
     add("pos", "Pos", (w.x ~= nil and w.y ~= nil) and (w.x .. "," .. w.y) or "-",
       "readonly")
@@ -102,6 +107,9 @@ function Details.title(state)
       or o.sprite or o.item or "OBJECT"
     return (o.object_type or "OBJECT"):upper() .. " " .. tostring(n)
   end
+  if t and t.map then
+    return "MAP " .. tostring(t.mapId or "")
+  end
   if t and t.item then
     return (t.item.kind or "ITEM"):upper() .. " " .. tostring(t.item.id or "")
   end
@@ -143,6 +151,14 @@ local function applyToObject(session, d, key, value)
   return false
 end
 
+local function applyToMap(session, d, key, value)
+  if not (d and d.map) then return false end
+  if key == "name" then
+    return session:setMapName(d.mapId, value)
+  end
+  return false
+end
+
 -- Commits an edited value to the active field (writes through to the warp /
 -- item / object).  Refreshes the field's display value on success.
 function Details.commit(session, d, fieldIdx, value)
@@ -151,6 +167,7 @@ function Details.commit(session, d, fieldIdx, value)
   local ok
   if d.warp then ok = applyToWarp(session, d, f.key, value)
   elseif d.object then ok = applyToObject(session, d, f.key, value)
+  elseif d.map then ok = applyToMap(session, d, f.key, value)
   else ok = applyToItem(d, f.key, value) end
   if ok then f.value = value end
   return ok
@@ -164,14 +181,21 @@ function Details.nudge(session, d, delta)
   Details.commit(session, d, d.index, tostring(v))
 end
 
--- Enter on the active field: starts a text edit, or runs a DELETE action.
+-- Enter on the active field: starts a text edit, or runs an action.
 function Details.activate(ui, session, d)
   local f = d and d.fields and d.fields[d.index]
   if not f then return end
   if f.type == "text" then
     d.editing = { fieldIdx = d.index, buf = f.value }
   elseif f.type == "action" then
-    Details.delete(ui, session, d)
+    if f.key == "encounters" then
+      -- Open the encounter editor for this map.
+      local EncEditor = require("mods.mapamap.components.encounter_editor")
+      ui.details = nil
+      EncEditor.open(ui, session)
+    else
+      Details.delete(ui, session, d)
+    end
   end
 end
 
@@ -204,6 +228,8 @@ function Details.open(ui, session, target)
     warp = target.warp,
     object = target.object,
     item = target.item,
+    map = target.map,
+    mapId = target.mapId,
     fields = Details.build(session, target),
     index = 1,
     editing = nil,
@@ -284,55 +310,40 @@ end
 -- ---------------------------------------------------------------------------
 -- Draw
 
-local function fitText(font, s, budgetPx, scale)
-  scale = scale or 2
-  local function w(t)
-    return ((font.width and font.width(t)) or (#t * 8)) * scale
-  end
-  if w(s) <= budgetPx then return s end
-  while #s > 0 and w(s) > budgetPx do s = s:sub(1, #s - 1) end
-  return s .. "..."
-end
-
 function Details.draw(session, state, vw, vh, font)
   local x, y, w, h = Details.rect(vw, vh)
-  love.graphics.setColor(0, 0, 0, 0.92)
-  love.graphics.rectangle("fill", x, y, w, h)
-  love.graphics.setColor(0.55, 0.55, 0.6, 0.5)
-  love.graphics.rectangle("line", x, y, w, h)
+  Panel.drawBg(x, y, w, h, 0.92)
+  Panel.drawTitle(font, Details.title(state), x, y)
 
-  Text.label(font, Details.title(state), x + Details.PAD, y + 6, 2, {
-    bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 3, padY = 2,
-  })
-
-  local rowY = y + Details.PAD + 20
+  local rowY = y + Panel.PAD + 20
   for i, f in ipairs(state.fields or {}) do
-    local ry = rowY + (i - 1) * (Details.ROW_H + 6)
-    Text.label(font, fitText(font, f.label .. ":", w / 2 - 6, 2),
-      x + Details.PAD, ry, 2, { bg = { 0.85, 0.85, 0.9, 0.9 }, padX = 2, padY = 1 })
+    local ry = rowY + (i - 1) * (Panel.ROW_H + 6)
+    Text.label(font, Panel.fitText(font, f.label .. ":", w / 2 - 6, 2),
+      x + Panel.PAD, ry, 2, { bg = Panel.CHIP_ROW, padX = 2, padY = 1 })
     local value = f.value
     if state.editing and state.editing.fieldIdx == i then
       value = state.editing.buf .. "_"
     end
-    Text.label(font, fitText(font, value, w / 2 - 8, 2),
-      x + w / 2, ry, 2, { bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 2, padY = 1 })
+    Text.label(font, Panel.fitText(font, value, w / 2 - 8, 2),
+      x + w / 2, ry, 2, { bg = Panel.CHIP_VALUE, padX = 2, padY = 1 })
     if state.index == i then
       if f.type == "action" then
-        love.graphics.setColor(1, 0.3, 0.2, 0.9)
-        love.graphics.rectangle("line", x + 2, ry - 3, w - 4, Details.ROW_H)
+        if f.key == "encounters" then
+          love.graphics.setColor(0.2, 0.8, 0.3, 0.9)
+        else
+          love.graphics.setColor(1, 0.3, 0.2, 0.9)
+        end
+        love.graphics.rectangle("line", x + 2, ry - 3, w - 4, Panel.ROW_H)
       else
-        love.graphics.setColor(0.25, 0.5, 1, 0.9)
-        love.graphics.rectangle("line", x + 2, ry - 3, w - 4, Details.ROW_H)
+        Panel.drawSel(x + 2, ry - 3, w - 4, Panel.ROW_H)
       end
     end
   end
 
   local hint = state.editing and "Enter: ok  Esc: cancel"
                     or "Up/Down: field  L/R: +-  Enter: edit  X: del  Esc: close"
-  Text.label(font, fitText(font, hint, w - Details.PAD * 2, 1),
-    x + Details.PAD, y + h - Details.PAD - 8, 1,
-    { bg = { 0.2, 0.2, 0.25, 0.9 }, padX = 2, padY = 1 })
-  love.graphics.setColor(1, 1, 1, 1)
+  Panel.drawHint(font, hint, x, y, w, h)
+  Panel.resetColor()
 end
 
 return Details

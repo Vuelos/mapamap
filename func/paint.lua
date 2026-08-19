@@ -10,6 +10,8 @@ local Neighbors = require("mods.mapamap.func.neighbors")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Details = require("mods.mapamap.components.details")
 local Blueprints = require("mods.mapamap.func.blueprints")
+local Objects = require("mods.mapamap.func.objects")
+local Warps = require("mods.mapamap.func.warps")
 
 local Paint = {}
 
@@ -98,13 +100,19 @@ function Paint.paintAt(ui, brush, session, mx, my)
       session:reloadGraftedRenderers()
     end
   end
-  -- When the cursor lands on void (outside every laid-out map body) try to
-  -- create a new map flush against the nearest host.  On failure (no flush
-  -- contact possible) the paint is a no-op.
+  -- When the cursor lands on void (outside every laid-out map body) buffer the
+  -- cell for a single map created at stroke end (see commitVoidStroke).  This
+  -- avoids spraying one 1x1 map per painted block; instead one map sized to the
+  -- whole drag is created, with correct full-width connections.  A paint with no
+  -- flush contact possible is a no-op (cellEdgeSide reports an edge, but no host
+  -- is actually adjacent so nothing is buffered and createForBlocks no-ops too).
   local side = session:cellEdgeSide(session.cursorBx, session.cursorBy)
   if side and not session:cellInsideNeighbor(session.cursorBx, session.cursorBy) then
-    local newId = session:createMapAtCursor()
-    if not newId then return false end
+    brush.paintVoidCells = brush.paintVoidCells or {}
+    brush.paintVoidCells[#brush.paintVoidCells + 1] = {
+      bx = session.cursorBx, by = session.cursorBy, block = session.selectedBlock,
+    }
+    return false
   end
   session:snapCursorToBlock()
   session:paintBlock()
@@ -148,6 +156,45 @@ function Paint.destPick(ui, session, mx, my)
       ui.warpDestPick = false
     end
   end
+  return true
+end
+
+-- Finalizes a block-paint stroke that landed on void: creates ONE map sized
+-- like the existing maps (host-sized, full-seam connections) on the void the
+-- drag touched -- never one 1x1 map per painted block -- and paints every
+-- buffered cell into it.  Called from input on pointer release.  Returns true
+-- when a map was created / painted.
+function Paint.commitVoidStroke(brush, session)
+  local cells = brush.paintVoidCells
+  if not cells or #cells == 0 then return false end
+  brush.paintVoidCells = nil
+
+  local MapGrid = require("mods.mapamap.func.map_grid")
+
+  -- Create a host-sized map for the drag (covers a straight drag next to a
+  -- single host).  L-shaped strokes may need a map per arm: any cell still
+  -- outside a laid-out map after the first create gets its own host-sized map.
+  local function ensure(cell)
+    if session:cellInsideNeighbor(cell.bx, cell.by) then return true end
+    local bx = math.floor(cell.bx / 2)
+    local by = math.floor(cell.by / 2)
+    return MapGrid.createLikeNeighbor(session, bx, by) ~= nil
+  end
+
+  ensure(cells[1])
+  for _, c in ipairs(cells) do
+    if not session:cellInsideNeighbor(c.bx, c.by) then ensure(c) end
+  end
+
+  for _, c in ipairs(cells) do
+    if session:cellInsideNeighbor(c.bx, c.by) then
+      session.selectedBlock = c.block
+      session.cursorBx = c.bx
+      session.cursorBy = c.by
+      session:paintBlock()
+    end
+  end
+  session:refreshLiveRenderers()
   return true
 end
 

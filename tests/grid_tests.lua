@@ -399,7 +399,8 @@ function test_autofillClosesPartialSeam()
 end
 
 -- Paint-time void creation: a block 1 step east of A creates a new map flush
--- against A's east seam, with reciprocal wiring.
+-- against A's east seam, sized like A (host-sized, full-seam connections) --
+-- not a 1x1 map span, with reciprocal wiring.
 function test_createForPaintEastOfA()
   local maps = { A = miniMap("A", 10, 9, {}) }
   local s = gridSession(maps, "A")
@@ -408,8 +409,9 @@ function test_createForPaintEastOfA()
   local m = maps[id]
   assert(m and m.height == 9,
     "created map seam-parallel dimension matches A's height")
-  assert(m.width == 1,
-    "created map axis-parallel dimension spans the 1-block gap, got " .. tostring(m.width))
+  assert(m.width == 10,
+    "created map axis-parallel dimension matches A's width (host-sized), got "
+      .. tostring(m.width))
   assert(m.connections.west and m.connections.west.map == "A",
     "created map connects west to A")
   assert(conn(maps.A, "east") and conn(maps.A, "east").map == id,
@@ -461,6 +463,27 @@ function test_createForPaintWestOfA()
   assertReciprocal(maps, m, "created-west")
 end
 
+-- A straight drag of several blocks east of A must yield ONE host-sized map,
+-- not one 1x1 map per painted block.  After the first cell creates the
+-- host-sized map, the rest of the drag falls inside it, so no further maps are
+-- created.
+function test_paintDragEastOfACreatesSingleMap()
+  local maps = { A = miniMap("A", 10, 9, {}) }
+  local s = gridSession(maps, "A")
+  local id1 = MapGrid.createForPaint(s, 10, 4)
+  local id2 = MapGrid.createForPaint(s, 11, 4)
+  local id3 = MapGrid.createForPaint(s, 12, 4)
+  assert(id1, "first cell creates a map")
+  assert(id2 == nil, "second cell is inside the host-sized map; no 2nd map")
+  assert(id3 == nil, "third cell is inside the host-sized map; no 3rd map")
+  local count = 0
+  for _ in pairs(s._newMaps or {}) do count = count + 1 end
+  assert(count == 1, "only one map should be created, got " .. count)
+  local m = maps[id1]
+  assert(m.width == 10 and m.height == 9,
+    "the created map is host-sized (10x9), got " .. m.width .. "x" .. m.height)
+end
+
 return {
   name = "MAPAMAP_GRID",
   tests = {
@@ -482,5 +505,6 @@ return {
     "test_createForBlocksEastRect",
     "test_createForBlocksFullyCovered",
     "test_createForPaintWestOfA",
+    "test_paintDragEastOfACreatesSingleMap",
   },
 }

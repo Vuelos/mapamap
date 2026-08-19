@@ -1,7 +1,7 @@
 {
   "id": "mapamap",
   "name": "Mapamap",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -9,5 +9,6 @@
   "game_version": ">=0.0.0-0 <2.0.0",
   "priority": 100,
   "permissions": ["engine_internals", "filesystem"],
-  "description": "on-map map editor: paint blocks directly on the map with hotbar and inventory."
+  "description": "on-map map editor: paint blocks directly on the map with hotbar and inventory.",
+  "gen2compat": true
 }

@@ -54,8 +54,7 @@ local function drawCursor(session, game)
     x, y, w, h = Coords.blockRect(t, cx, cy)
   end
   if not x then return end
-  local ok, r = pcall(function() return session.map and session.map.renderer end)
-  if not ok or not r then return end
+  if not session.map then return end
   -- The border is always drawn so the target cell is visible whether the
   -- brush is idle or mid-drag; the dark fill tint only marks an active
   -- press/drag and makes the target read over any palette.
@@ -127,19 +126,23 @@ end
 -- cannot be resolved.  Returns true when something was drawn.
 local function drawPreviewBlock(session, bid, srcTs, x, y, sx, sy)
   local r = session.map and session.map.renderer
-  if not r or not r.image then return false end
   local image, quads, aliasMap, block
   local bundle
   if srcTs and session.tileset and srcTs ~= session.tileset.id then
     local tsDef = session.data and session.data.tilesets and session.data.tilesets[srcTs]
     if tsDef and session.thumbnailBundle then bundle = session:thumbnailBundle(tsDef) end
   end
+  if not bundle and session.tileset and session.thumbnailBundle then
+    bundle = session:thumbnailBundle(session.tileset)
+  end
   if bundle then
     image, quads, aliasMap = bundle.image, bundle.quads, bundle.aliasMap
     block = bundle.blocks and bundle.blocks[bid + 1]
-  else
+  elseif r and r.image then
     image, quads, aliasMap = r.image, r.quads, r.aliasMap
     block = session.tileset and session.tileset.blocks and session.tileset.blocks[bid + 1]
+  else
+    return false
   end
   if not image or not quads or not block then return false end
   love.graphics.push()
@@ -210,7 +213,7 @@ end
 -- glued to their tiles until the session reconciles on the next input event.
 -- Falls back to the session's own layout when no live overworld is available.
 function Overlay.visibleWarps(session, game)
-  local ow = game and game.overworld
+  local ow = game and (game.overworld or game.world)
   local out = {}
   local function collect(def, ox, oy)
     for _, w in ipairs(def and def.warps or {}) do
@@ -220,7 +223,12 @@ function Overlay.visibleWarps(session, game)
   if ow and ow.map and ow.map.def then
     collect(ow.map.def, 0, 0)
     for _, nb in ipairs(ow.neighbors or {}) do
-      if nb and nb.map and nb.map.def then collect(nb.map.def, nb.ox, nb.oy) end
+      if nb and nb.map and nb.map.def then
+        collect(nb.map.def, nb.ox, nb.oy)
+      elseif nb and nb.id and nb.ox ~= nil then
+        local def = session.data and session.data.maps and session.data.maps[nb.id]
+        collect(def, nb.ox, nb.oy)
+      end
     end
   else
     for _, e in ipairs(session:visibleWarps()) do out[#out + 1] = e end
@@ -261,6 +269,41 @@ local function drawWarps(session, game)
         })
       end
     end
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
+
+-- Ghost indicator while dragging a warp or object to a new cell (RMB drag).
+-- Draws a translucent circle at the cursor cell so the user sees where the
+-- entity will land on release.
+local function drawEntityDrag(session, game)
+  local drag = Input.draggingEntity
+  if not drag then return end
+  local t = Coords.transform(game)
+  if not t then return end
+  local mx, my = love.mouse.getPosition()
+  local tx, ty = Coords.toWorldCell(t, mx, my)
+  if not tx then return end
+  -- Snap the ghost to the target cell center.
+  local wx = drag.ox + tx * 16
+  local wy = drag.oy + ty * 16
+  local sx, sy = Coords.toScreen(t, wx, wy)
+  if not sx then return end
+  local cx, cy = sx + 8 * t.sx, sy + 8 * t.sy
+  local r = 6 * t.sx
+  if drag.kind == "warp" then
+    love.graphics.setColor(0.2, 0.7, 1, 0.55)
+    love.graphics.circle("fill", cx, cy, r)
+    love.graphics.setColor(1, 1, 1, 0.6)
+    love.graphics.setLineWidth(1)
+    love.graphics.circle("line", cx, cy, r)
+  else
+    -- Object ghost: small filled square (NPC marker style).
+    local s = 10 * t.sx
+    love.graphics.setColor(0.2, 0.9, 0.3, 0.5)
+    love.graphics.rectangle("fill", cx - s / 2, cy - s, s, s)
+    love.graphics.setColor(1, 1, 1, 0.6)
+    love.graphics.rectangle("line", cx - s / 2, cy - s, s, s)
   end
   love.graphics.setColor(1, 1, 1, 1)
 end
@@ -308,6 +351,7 @@ function Overlay.draw(session, game, viewport)
     drawBlueprintPreview(session, game)
     drawSelection(session, game)
     drawWarps(session, game)
+    drawEntityDrag(session, game)
     drawDestPick(session, game)
     -- HUD panels on top, in open/close order so the picker and Details modal
     -- cover the inventory/hotbar rather than being hidden behind them.
@@ -326,6 +370,10 @@ function Overlay.draw(session, game, viewport)
     if Input.details then
       local Details = require("mods.mapamap.components.details")
       Details.draw(session, Input.details, vw, vh, session.font)
+    end
+    if Input.encEditor then
+      local EncEditor = require("mods.mapamap.components.encounter_editor")
+      EncEditor.draw(session, Input.encEditor, vw, vh, session.font)
     end
 
     -- A picked-up item (picker or hotbar drag) floats under the cursor above

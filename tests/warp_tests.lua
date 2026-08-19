@@ -44,8 +44,8 @@ local function inventoryCellCentre(i)
   local ci = i - 1
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
-  return px + Inventory.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
-         py + Inventory.PAD + Inventory.TAB_H + Inventory.GAP
+  return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
+         py + Panel.PAD + Panel.TAB_H + Inventory.GAP
             + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
 end
 

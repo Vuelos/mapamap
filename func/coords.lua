@@ -19,9 +19,11 @@
 -- affine matrix describes it here; editing is gated off while tilt is active
 -- (Tilt.hasProjection()).  Returned transform values assume the flat blit.
 
-local Renderer = require("src.render.Renderer")
-local Zoom = require("src.render.Zoom")
-local Tilt = require("src.render.Tilt")
+local ok_R, Renderer = pcall(require, "src.render.Renderer")
+local ok_Z, Zoom = pcall(require, "src.render.Zoom")
+local ok_T, Tilt = pcall(require, "src.render.Tilt")
+local Gen = require("mods.mapamap.func.gen")
+local function tiltActive() return ok_T and Tilt.active() end
 
 local Coords = {}
 
@@ -41,8 +43,12 @@ end
 -- be disabled (tilt projection or no camera).  Table fields:
 --   camx, camy, vw, vh, sp, sx, sy, wox, woy  (sx, sy = units per world px)
 function Coords.transform(game)
-  if Tilt.active() then return nil end
-  local ow = game and game.overworld
+  -- Gen 2: delegate to the generation-aware transform which computes fitScale
+  -- through FaithfulRes instead of the Renderer singleton (which Gen 2 never
+  -- initialises as a standalone module -- the World composites in Game2:draw).
+  if Gen.isGen2() then return Gen.flatTransform(game) end
+  if tiltActive() then return nil end
+  local ow = game and (game.overworld or game.world)
   local cam = ow and ow.camera
   if not cam then return nil end
 

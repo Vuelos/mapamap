@@ -14,16 +14,13 @@
 
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Item = require("mods.mapamap.components.item")
+local Panel = require("mods.mapamap.components.panel")
 local Text = require("mods.mapamap.components.text")
 
 local Inventory = {}
 
-Inventory.PAD = 8
 Inventory.SLOT = 40          -- square cell size (a bit smaller than the hotbar)
 Inventory.GAP = 6
-Inventory.TAB_H = 24         -- category tab row height (scaled text fits)
-Inventory.TAB_GAP = 4        -- spacing between the per-text tab buttons
-Inventory.TAB_PAD_X = 1      -- button padding around the scaled label
 Inventory.COLS = 10          -- fixed column count for the item grid
 Inventory.SIDE_GAP = 10      -- gap between the inventory and the side panel
 
@@ -53,20 +50,22 @@ end
 -- How many item rows fit above the hotbar.
 function Inventory.rows(vh)
   local top = 8 -- clearance above the panel keeps it inside the window
-  local avail = hotbarTop(vh) - top - Inventory.PAD - Inventory.TAB_H - Inventory.GAP
+  local avail = hotbarTop(vh) - top - Panel.PAD - Panel.TITLE_H
+                - Panel.TITLE_GAP - Panel.TAB_H - Inventory.GAP
   return math.max(1, math.floor(avail / (Inventory.SLOT + Inventory.GAP)))
 end
 
 -- Overall panel rect (left-aligned, bottom clamped above the hotbar).
 function Inventory.rect(vw, vh)
   local rows = Inventory.rows(vh)
-  local w = Inventory.PAD * 2 + Inventory.COLS * Inventory.SLOT
+  local w = Panel.PAD * 2 + Inventory.COLS * Inventory.SLOT
             + (Inventory.COLS - 1) * Inventory.GAP
-  local h = Inventory.PAD + Inventory.TAB_H + Inventory.GAP
+  local h = Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP
+            + Panel.TAB_H + Inventory.GAP
             + rows * Inventory.SLOT + (rows - 1) * Inventory.GAP
   local y = hotbarTop(vh) - h
   if y < 8 then y = 8 end
-  return Inventory.PAD, y, w, h
+  return Panel.PAD, y, w, h
 end
 
 -- The full panel size (w, h).  The side panels (tileset picker, blueprint
@@ -87,43 +86,23 @@ function Inventory.perPage(vw, vh)
   return Inventory.COLS * Inventory.rows(vh)
 end
 
--- Scaled (2x) width of a tab label in screen units, matching Text.label's
--- width math so the button hugs the drawn chip (fonts without a `width`
--- method fall back to the same #glyphs * 8 estimate).
-function Inventory.labelWidth(font, label)
-  local glyphW = (font and font.width and font.width(label)) or (#tostring(label) * 8)
-  return glyphW * 2
-end
-
--- Bounding rect of a tab button: each button is sized to its label's text
--- width (plus padding), and the buttons sit side by side with a small gap.
+-- Bounding rect of a tab button: delegates to Panel.tabRect with the
+-- inventory's tabs.  The tabs sit below the title, so panelY is offset.
 function Inventory.tabRect(vw, vh, i, font)
-  if i < 1 or i > #Inventory.TABS then return nil end
-  local px, py, _, _ = Inventory.rect(vw, vh)
-  local x = px + Inventory.PAD
-  for j = 1, i - 1 do
-    x = x + Inventory.labelWidth(font, Inventory.TABS[j].label)
-          + Inventory.TAB_PAD_X * 2 + Inventory.TAB_GAP
-  end
-  local w = Inventory.labelWidth(font, Inventory.TABS[i].label)
-            + Inventory.TAB_PAD_X * 2
-  return x, py + Inventory.PAD, w, Inventory.TAB_H
+  local px, py = Inventory.rect(vw, vh)
+  return Panel.tabRect(Inventory.TABS, px, Panel.titleBottom(py), font, i)
 end
 
 -- Which tab button (1..n) a screen point is over, or nil.
 function Inventory.tabAt(vw, vh, mx, my, font)
-  for i = 1, #Inventory.TABS do
-    local x, y, w, h = Inventory.tabRect(vw, vh, i, font)
-    if mx >= x and mx < x + w and my >= y and my < y + h then return i end
-  end
-  return nil
+  local px, py = Inventory.rect(vw, vh)
+  return Panel.tabAt(Inventory.TABS, px, Panel.titleBottom(py), font, mx, my)
 end
 
 -- True when a screen point is inside the inventory panel (used to consume
 -- clicks/wheel so they never fall through to the world underneath).
 function Inventory.over(vw, vh, mx, my)
-  local px, py, pw, ph = Inventory.rect(vw, vh)
-  return mx >= px and mx < px + pw and my >= py and my < py + ph
+  return Panel.over(Inventory.rect, vw, vh, mx, my)
 end
 
 -- Absolute grid slot index (1-based, page-aware) under (mx,my), or nil.
@@ -131,8 +110,9 @@ end
 function Inventory.itemAt(vw, vh, mx, my, scroll)
   local px, py, pw, ph = Inventory.rect(vw, vh)
   if mx < px or mx >= px + pw or my < py or my >= py + ph then return nil end
-  local gx = mx - px - Inventory.PAD
-  local gy = my - py - Inventory.PAD - Inventory.TAB_H - Inventory.GAP
+  local gx = mx - px - Panel.PAD
+  local gy = my - py - Panel.PAD - Panel.TITLE_H - Panel.TITLE_GAP
+             - Panel.TAB_H - Inventory.GAP
   if gx < 0 then return nil end
   local col = math.floor(gx / (Inventory.SLOT + Inventory.GAP))
   local row = math.floor(gy / (Inventory.SLOT + Inventory.GAP))
@@ -226,34 +206,20 @@ function Inventory.draw(session, state, vw, vh, font, selectedItem)
   local list = Inventory.tabList(session, state)
   local px, py, pw, ph = Inventory.rect(vw, vh)
 
-  love.graphics.setColor(0, 0, 0, 0.85)
-  love.graphics.rectangle("fill", px, py, pw, ph)
-  love.graphics.setColor(0.55, 0.55, 0.6, 0.5)
-  love.graphics.rectangle("line", px, py, pw, ph)
+  Panel.drawBg(px, py, pw, ph, 0.85)
 
-  -- Tab row: single light chip per tab (no dark button rectangle behind it);
-  -- the active tab gets a blue outline so the selected category still reads.
+  Panel.drawTitle(font, "INVENTORY", px, py)
+
   local mx, my = love.mouse.getPosition()
-  local hoverTab = Inventory.tabAt(vw, vh, mx, my, font)
-  for i = 1, #Inventory.TABS do
-    local x, y, w, h = Inventory.tabRect(vw, vh, i)
-    Text.label(font, Inventory.TABS[i].label, x + 4, y + 3, 2, {
-      bg = { 0.92, 0.92, 0.95, 0.95 }, padX = 2, padY = 1,
-    })
-    if i == tab then
-      love.graphics.setColor(0.25, 0.5, 1, 0.9)
-      love.graphics.rectangle("line", x + 1, y + 1, w - 2, h - 2)
-    elseif hoverTab == i then
-      love.graphics.setColor(1, 1, 1, 0.9)
-      love.graphics.rectangle("line", x + 1, y + 1, w - 2, h - 2)
-    end
-  end
+  Panel.drawTabs(Inventory.TABS, px, Panel.titleBottom(py),
+    font, tab, mx, my)
+  Panel.resetColor()
 
   -- Item grid.
   local perPage = Inventory.perPage(vw, vh)
   local pageStart = ((state.scroll or 1) - 1) * perPage
-  local gx = px + Inventory.PAD
-  local gy = py + Inventory.PAD + Inventory.TAB_H + Inventory.GAP
+  local gx = px + Panel.PAD
+  local gy = Panel.titleBottom(py) + Panel.PAD + Panel.TAB_H + Inventory.GAP
   local hoverIdx = Inventory.itemAt(vw, vh, mx, my, state.scroll or 1)
 
   for row = 0, Inventory.rows(vh) - 1 do
@@ -262,15 +228,14 @@ function Inventory.draw(session, state, vw, vh, font, selectedItem)
       local cellX = gx + col * (Inventory.SLOT + Inventory.GAP)
       local cellY = gy + row * (Inventory.SLOT + Inventory.GAP)
       local item = list[slot]
-      love.graphics.setColor(0.2, 0.2, 0.24, 0.9)
+      love.graphics.setColor(Panel.COLOR_CELL_BG[1], Panel.COLOR_CELL_BG[2],
+        Panel.COLOR_CELL_BG[3], Panel.COLOR_CELL_BG[4])
       love.graphics.rectangle("fill", cellX, cellY, Inventory.SLOT, Inventory.SLOT)
       if item then
         local pad = 2
         Item.draw(session, item, cellX + pad, cellY + pad, Inventory.SLOT - pad * 2)
         if hoverIdx == slot then
-          love.graphics.setColor(1, 1, 1, 0.95)
-          love.graphics.rectangle("line", cellX - 1, cellY - 1,
-            Inventory.SLOT + 2, Inventory.SLOT + 2)
+          Panel.drawCellHover(cellX, cellY, Inventory.SLOT)
         elseif selectedItem == item then
           love.graphics.setColor(1, 0.3, 0.3, 0.8)
           love.graphics.rectangle("line", cellX - 1, cellY - 1,
@@ -279,7 +244,7 @@ function Inventory.draw(session, state, vw, vh, font, selectedItem)
       end
     end
   end
-  love.graphics.setColor(1, 1, 1, 1)
+  Panel.resetColor()
 end
 
 return Inventory

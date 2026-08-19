@@ -93,7 +93,7 @@ local function drawConnection(session, t, dir, worldX, worldY, worldW, worldH, c
   love.graphics.rectangle("fill", rx, ry, rw, rh)
   -- Thin colored border: orange primary, magenta extra.
   local col = isExtra and EXTRA or PRIMARY
-  love.graphics.setColor(col[1], col[2], col[3], 0.9)
+  love.graphics.setColor(col[1], col[2], col[3], 0.5)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", rx, ry, rw, rh)
   -- Destination name, vertical on the side edges.
