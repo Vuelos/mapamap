@@ -315,8 +315,6 @@ function MapGrid.createMap(self, bx, by, w, h)
     for _, f in ipairs(wireable) do
       details[#details + 1] = string.format("%s:%s@%s", tostring(f.id), tostring(f.side), tostring(f.off))
     end
-    self.mod.log:info("mapamap debug: createMap void=(%s,%s,%s,%s) wireable=%s",
-      tostring(bx), tostring(by), tostring(w), tostring(h), table.concat(details, "; "))
   end
 
   local newId = self.mapId .. "_EXT"

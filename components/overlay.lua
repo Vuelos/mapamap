@@ -31,6 +31,32 @@ local Text = require("mods.mapamap.components.text")
 
 local Overlay = {}
 
+-- Whether the overworld map is currently the front-most layer the player is
+-- looking at.  Dialogs (TextBox), battles and the various menus all stack
+-- ABOVE the overworld on the game's state stack; while one of them owns the
+-- top, the world markers (warps/borders/cursor) must not draw over its UI.
+-- Gen 1 pushes the OverworldState itself, so the map is front only when the
+-- top IS that state.  Gen 2 keeps the World off the stack (it draws directly),
+-- so ANY state on top obscures it -- and its battles are flagged straight on
+-- the World (battleActive) even before the battle screen appears.
+local function worldObscured(game)
+  if not game then return false end
+  -- Gen 2: the World carries the battle flag directly.
+  local world = game.world
+  if world and world.battleActive then return true end
+  local stack = game.stack
+  local states = stack and stack.states
+  local top = states and states[#states]
+  if not top then
+    -- No covering state (Gen 2 free walk, or the headless draw harness): the
+    -- map is the front layer.
+    return false
+  end
+  if game.overworld and top == game.overworld then return false end
+  if game.world and top == game.world then return false end
+  return true
+end
+
 -- --- world cursor highlight ------------------------------------------------
 
 local function drawCursor(session, game)
@@ -214,6 +240,9 @@ end
 -- glued to their tiles until the session reconciles on the next input event.
 -- Falls back to the session's own layout when no live overworld is available.
 function Overlay.visibleWarps(session, game)
+  -- A dialog/battle/menu on top of the overworld hides the warp circles: the
+  -- markers would draw over the game's own UI, not the map.
+  if worldObscured(game) then return {} end
   local ow = game and (game.overworld or game.world)
   local out = {}
   local function collect(def, ox, oy)
@@ -346,14 +375,18 @@ function Overlay.draw(session, game, viewport)
   -- draw throws; without this, an error skips the pop and the graphics state
   -- stack accumulates one level per errored frame until it overflows.
   local ok, err = pcall(function()
-    -- World markers first so the HUD panels always render above them.
-    Borders.draw(session, game)
-    drawCursor(session, game)
-    drawBlueprintPreview(session, game)
-    drawSelection(session, game)
-    drawWarps(session, game)
-    drawEntityDrag(session, game)
-    drawDestPick(session, game)
+    -- World markers first so the HUD panels always render above them.  They
+    -- are skipped while a dialog/battle/menu covers the map -- drawing warp
+    -- circles/borders/cursor over the game's own UI would look broken.
+    if not worldObscured(game) then
+      Borders.draw(session, game)
+      drawCursor(session, game)
+      drawBlueprintPreview(session, game)
+      drawSelection(session, game)
+      drawWarps(session, game)
+      drawEntityDrag(session, game)
+      drawDestPick(session, game)
+    end
     -- HUD panels on top, in open/close order so the picker and Details modal
     -- cover the inventory/hotbar rather than being hidden behind them.
     if Input.showInventory then

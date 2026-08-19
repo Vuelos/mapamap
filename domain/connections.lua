@@ -125,9 +125,6 @@ function Connections.addConnection(def, otherDef, dir, offset, span)
   end
 
   local recip = { north = "south", south = "north", west = "east", east = "west" }
-  if def and def.id and otherDef and otherDef.id then
-    print(string.format("mapamap debug: addConnection %s.%s -> %s @ offset=%s span=%s", tostring(def.id), tostring(dir), tostring(otherDef.id), tostring(offset or 0), tostring(span or 0)))
-  end
   wire(def, otherDef, dir, offset, span)
   wire(otherDef, def, recip[dir], -offset, span)
 end
@@ -172,10 +169,6 @@ function Connections.mergeExtraConnections(mod, data)
           for _, conn in ipairs(merged) do
             entries[#entries + 1] = string.format("%s@%s", tostring(conn.map), tostring(conn.offset or 0))
           end
-          mod.log:info("mapamap debug: merged %d extra connection(s) on %s.%s -> %s",
-            #extras, mapId, dir, table.concat(entries, ", "))
-          mod.log:info("mapamap: merged %d extra connection(s) on %s.%s",
-            #extras, mapId, dir)
         end
       end
     end

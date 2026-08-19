@@ -383,7 +383,7 @@ function Input.mousepressed(session, game, mx, my, button)
     end
     -- Right-click on a map body opens its Details (rename) on release.  A drag
     -- (detected in mousemoved) still erases; only a click opens the panel.
-    if mapDef then
+    if mapDef and Input.showMapBorders then
       EditorTools.deferMapClick(mx, my, mapId or session.mapId)
       return true
     end

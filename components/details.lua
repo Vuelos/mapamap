@@ -31,7 +31,7 @@ end
 -- nil.  Rows mirror the keyboard's field list.
 function Details.hit(vw, vh, mx, my)
   local x, y, w, h = Details.rect(vw, vh)
-  if mx < x or mx >= x + w or my >= y or my >= y + h then return nil end
+  if mx < x or mx >= x + w or my < y or my >= y + h then return nil end
   local rowY = y + Panel.PAD + 20
   local n = math.floor((my - rowY) / (Panel.ROW_H + 6)) + 1
   if n < 1 then return nil end
