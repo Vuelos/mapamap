@@ -2,6 +2,7 @@
 --
 -- While the overlay is active:
 --   * LMB drag  -> paint the selected block (or place the selected sprite)
+--   * LMB click on an entity -> copy it to the active hotbar slot
 --   * RMB drag  -> erase back to the snapshot (blocks) / remove object (sprites)
 --   * Q         -> pick the block under the cursor into the selected slot
 --   * E         -> toggle the tileset picker panel
@@ -83,8 +84,7 @@ Input._bpMoved = false       -- a move happened after the press (it was a drag)
 -- Warp editing: a selected warp (from the Warps tab or a world right-click)
 -- with a graphical destination-pick mode (C arms it; the next world click sets
 -- the target) and a modal Details panel for field editing.
-Input.selectedWarp = nil      -- a live def.warps entry, or nil
-Input.selectedObject = nil    -- a live def.objects entry, or nil
+Input.selectedItem = nil    -- a live def.objects, def.warps or def.signs entry, or nil
 Input.warpDestPick = false    -- arm "pick destination" for the selected warp
 Input.details = nil           -- { target, fields, index, editing } or nil
 Input.encEditor = nil         -- { session, fields, index, editing } or nil
@@ -339,9 +339,47 @@ function Input.mousepressed(session, game, mx, my, button)
   end
   -- World paint / erase.
   if button == 1 then
+    -- Click on a world entity: copy it to the active hotbar slot instead of
+    -- painting, so the user can pick it up with LMB.
+    local t = Coords.transform(session.game)
+    local pickedEntity, pickedType
+    if t then
+      local tx, ty = Coords.toWorldCell(t, mx, my)
+      session.cursorBx, session.cursorBy = tx, ty
+      pickedEntity = session:objectAt(tx, ty)
+      if pickedEntity then
+        pickedType = "object"
+      else
+        pickedEntity = session:warpAt(tx, ty)
+        if pickedEntity then
+          pickedType = "warp"
+        else
+          pickedEntity = session:signAt(tx, ty)
+          if pickedEntity then
+            pickedType = "sign"
+          end
+        end
+      end
+    end
+    if pickedEntity then
+      session.selectedItem = pickedEntity
+      local slotItem
+      if pickedType == "warp" then
+        slotItem = { kind = "entity", entityType = "warp",
+          destMap = pickedEntity.destMap, destWarp = pickedEntity.destWarp,
+          warp = pickedEntity }
+      elseif pickedType == "object" then
+        slotItem = { kind = "entity", entityType = "object", obj = pickedEntity }
+      else
+        slotItem = { kind = "entity", entityType = "sign", sign = pickedEntity }
+      end
+      Input.hotbar[Input.selected] = slotItem
+      Hotbar.apply(Input, session)
+      return true
+    end
     -- Graphical destination-pick: the next world click wires the selected
     -- warp to land on whatever laid-out map is under the cursor.
-    if Input.warpDestPick and session.selectedWarp then
+    if Input.warpDestPick and session.selectedItem then
       Paint.destPick(Input, session, mx, my)
       return true
     end
@@ -350,7 +388,6 @@ function Input.mousepressed(session, game, mx, my, button)
     Input.applySelection(session)
     -- Paint the cell under the cursor immediately (a press without a drag
     -- must still place one block).
-    local t = Coords.transform(session.game)
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
@@ -359,31 +396,31 @@ function Input.mousepressed(session, game, mx, my, button)
     return true
   elseif button == 2 then
     local t = Coords.transform(session.game)
-    local obj, warp, mapId, mapDef
+    local entity, entityType, mapId, mapDef
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
-      -- Hovered object/warp: select it and open its Details panel.
-      obj = session:objectAt(tx, ty)
-      if not obj then warp = session:warpAt(tx, ty) end
-      if not obj and not warp then sign = session:signAt(tx, ty) end
-      if not (obj or warp or sign) then
+      entity = session:objectAt(tx, ty)
+      if entity then
+        entityType = "object"
+      else
+        entity = session:warpAt(tx, ty)
+        if entity then
+          entityType = "warp"
+        else
+          entity = session:signAt(tx, ty)
+          if entity then
+            entityType = "sign"
+          end
+        end
+      end
+      if not entity then
         mapId, mapDef = Neighbors.mapAt(session.def, session.neighbors, tx, ty)
       end
     end
-    if obj then
-      session.selectedObject = obj
-      EditorTools.deferEntityClick("object", obj, mx, my)
-      return true
-    end
-    if warp then
-      session.selectedWarp = warp
-      EditorTools.deferEntityClick("warp", warp, mx, my)
-      return true
-    end
-    if sign then
-      session.selectedSign = sign
-      EditorTools.deferEntityClick("sign", sign, mx, my)
+    if entity then
+      session.selectedItem = entity
+      EditorTools.deferEntityClick(entityType, entity, mx, my)
       return true
     end
     -- Right-click on a map body opens its Details (rename) on release.  A drag
@@ -450,11 +487,12 @@ function Input.mousereleased(session, mx, my, button)
       local t = Coords.transform(session.game)
       if t then
         local tx, ty = Coords.toWorldCell(t, mx, my)
-        if ent.kind == "warp" then
+        local et = ent.entityType or ent.kind
+        if et == "warp" then
           session:moveWarp(ent.entity, tx, ty)
-        elseif ent.kind == "object" then
+        elseif et == "object" then
           session:moveObject(ent.entity, tx, ty)
-        elseif ent.kind == "sign" then
+        elseif et == "sign" then
           session:moveSign(ent.entity, tx, ty)
         end
       end
@@ -463,13 +501,8 @@ function Input.mousereleased(session, mx, my, button)
     -- Right-click (no drag) on a warp/object: open its Details panel.
     local pc = EditorTools.takeEntityClick()
     if pc then
-      if pc.kind == "warp" then
-        Input.openDetails(session, { warp = pc.entity })
-      elseif pc.kind == "object" then
-        Input.openDetails(session, { object = pc.entity })
-      elseif pc.kind == "sign" then
-        Input.openDetails(session, { sign = pc.entity })
-      end
+      local et = pc.entityType or pc.kind
+      Input.openDetails(session, { entity = pc.entity, entityType = et })
       return true
     end
     -- Right-click (no drag) on a map body: open its Details to rename it.
@@ -600,7 +633,7 @@ function Input.keypressed(session, key)
   elseif key == "c" then
     -- Arm graphical destination-pick for the selected warp: the next world
     -- click wires it to the laid-out map under the cursor.
-    if session.selectedWarp then
+    if session.selectedItem then
       Input.warpDestPick = not Input.warpDestPick
     end
     return true
@@ -619,6 +652,11 @@ function Input.keypressed(session, key)
     Input.inventory.scroll = 1
     return true
   elseif key == "tab" then
+    if Input.showInventory then
+      Input.showPicker = false
+      Input.details = nil
+      Input.encEditor = nil
+    end
     Input.showInventory = not Input.showInventory
     return true
   elseif key == "r" then
@@ -660,22 +698,19 @@ function Input.keypressed(session, key)
   return false
 end
 
--- Returns true if the mouse is over a object, warp or sign
+-- Returns true if the mouse is over an entity
 function Input.mouseHoveringSingleCellItem(session)
   local t = Coords.transform(session.game)
   local mx, my = love.mouse.getPosition()
-  local obj, warp, sign
+  local entity
   if t then
     local tx, ty = Coords.toWorldCell(t, mx, my)
     session.cursorBx, session.cursorBy = tx, ty
-    -- Hovered object/warp: select it and open its Details panel.
-    obj = session:objectAt(tx, ty)
-    if not obj then 
-      warp = session:warpAt(tx, ty) 
-      if not warp then sign = session:signAt(tx, ty) end
-    end
+    entity = session:objectAt(tx, ty)
+    if not entity then entity = session:warpAt(tx, ty) end
+    if not entity then entity = session:signAt(tx, ty) end
   end
-  if obj or warp or sign then return true end
+  if entity then return true end
   return false
 end
 

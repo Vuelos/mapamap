@@ -73,8 +73,8 @@ function Hotbar.apply(ui, session)
   if item.kind == "sprite" then
     session.selectedSprite = item.id
   elseif item.kind == "item" or item.kind == "blueprint"
-         or item.kind == "warp" or item.kind == "object" then
-    -- Warp/object tools place entities and never map to a block/sprite brush.
+         or item.kind == "entity" then
+    -- Entity tools place entities and never map to a block/sprite brush.
     session.selectedSprite = nil
     session.selectedBlock = nil
   else
@@ -92,28 +92,32 @@ function Hotbar.apply(ui, session)
   return true
 end
 
--- Loads an inventory cell into the selected hotbar slot.  A live warp / object
--- cell arms the copy tool for that entry (plus the fresh-NPC / new-warp
+-- Loads an inventory cell into the selected hotbar slot.  A live entity
+-- cell arms the copy tool for that entry (plus the fresh-NPC / new-warp / new-sign
 -- templates); everything else loads as-is.
 function Hotbar.loadItem(ui, session, item)
   if not item then return end
-  if item.kind == "warp" then
-    if item.newWarp then
-      ui.hotbar[ui.selected] = { kind = "warp", newWarp = true }
-    else
-      ui.hotbar[ui.selected] =
-        { kind = "warp", destMap = item.destMap, destWarp = item.destWarp,
-          warp = item.warp }
-      session.selectedWarp = item.warp
-    end
-  elseif item.kind == "object" then
-    -- A live map object loads a copy tool; the template arms a fresh object
-    -- creator.
-    if item.newObject then
-      ui.hotbar[ui.selected] = { kind = "object", newObject = true }
-    else
-      ui.hotbar[ui.selected] = { kind = "object", obj = item.obj }
-      session.selectedObject = item.obj
+  if item.kind == "entity" then
+    local et = item.entityType
+    if et == "warp" then
+      if item.newWarp then
+        ui.hotbar[ui.selected] = { kind = "entity", entityType = "warp", newWarp = true }
+      else
+        ui.hotbar[ui.selected] =
+          { kind = "entity", entityType = "warp", destMap = item.destMap, destWarp = item.destWarp,
+            warp = item.warp }
+        session.selectedItem = item.warp
+      end
+    elseif et == "object" then
+      if item.newObject then
+        ui.hotbar[ui.selected] = { kind = "entity", entityType = "object", newObject = true }
+      else
+        ui.hotbar[ui.selected] = { kind = "entity", entityType = "object", obj = item.obj }
+        session.selectedItem = item.obj
+      end
+    elseif et == "sign" then
+      ui.hotbar[ui.selected] = { kind = "entity", entityType = "sign", sign = item.sign }
+      session.selectedItem = item.sign
     end
   else
     ui.hotbar[ui.selected] = item

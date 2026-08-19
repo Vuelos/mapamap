@@ -56,11 +56,13 @@ end
 
 function test_tab_itemKinds()
   assert(Inventory.tabFor({ kind = "block" }) == 1, "blocks live in Tiles")
-  assert(Inventory.tabFor({ kind = "sprite" }) == 2, "sprites live in Objects")
-  assert(Inventory.tabFor({ kind = "item" }) == 2, "items live in Objects")
-  assert(Inventory.tabFor({ kind = "warp" }) == 3, "warps live in Warps")
-  assert(Inventory.tabFor({ kind = "blueprint" }) == 4, "blueprints live in Blueprints")
-  assert(Inventory.tabFor({ kind = "bogus" }) == 2, "unknown kinds default to Objects")
+  assert(Inventory.tabFor({ kind = "entity", entityType = "warp" }) == 2, "warps live in Entities")
+  assert(Inventory.tabFor({ kind = "entity", entityType = "object" }) == 2, "objects live in Entities")
+  assert(Inventory.tabFor({ kind = "entity", entityType = "sign" }) == 2, "signs live in Entities")
+  assert(Inventory.tabFor({ kind = "sprite" }) == 2, "sprites live in Entities")
+  assert(Inventory.tabFor({ kind = "item" }) == 2, "items live in Entities")
+  assert(Inventory.tabFor({ kind = "blueprint" }) == 3, "blueprints live in Blueprints")
+  assert(Inventory.tabFor({ kind = "bogus" }) == 2, "unknown kinds default to Entities")
 end
 
 function test_geometry_rows()
@@ -109,17 +111,14 @@ function test_tabRectTextFit()
   local x1, _, w1, _ = Inventory.tabRect(VW, VH, 1, fakeFont)
   local x2, _, w2, _ = Inventory.tabRect(VW, VH, 2, fakeFont)
   local x3, _, w3, _ = Inventory.tabRect(VW, VH, 3, fakeFont)
-  local x4, _, w4, _ = Inventory.tabRect(VW, VH, 4, fakeFont)
-  assert(w2 > w1, "Objects is wider than Tiles")
-  assert(w3 == w1, "Warps and Tiles are the same length")
-  assert(w4 > w2, "Blueprints is the widest tab")
+  assert(w2 > w1, "Entities is wider than Tiles")
+  assert(w3 > w2, "Blueprints is wider than Entities")
   assert(x2 == x1 + w1 + Panel.TAB_GAP, "tab 2 starts one gap after tab 1")
   assert(x3 == x2 + w2 + Panel.TAB_GAP, "tab 3 starts one gap after tab 2")
-  assert(x4 > x3 + w3, "tab 4 starts after tab 3")
   -- Hit-testing agrees with the per-text rects.
   local _, tabY, _, _ = Inventory.tabRect(VW, VH, 1, fakeFont)
   local ty = tabY + Panel.TAB_H / 2
-  assert(Inventory.tabAt(VW, VH, x4 + w4 / 2, ty, fakeFont) == 4,
+  assert(Inventory.tabAt(VW, VH, x3 + w3 / 2, ty, fakeFont) == 3,
     "Blueprints hit-tests inside its own button")
   assert(Inventory.tabAt(VW, VH, x2 + w2 + Panel.TAB_GAP / 2, ty, fakeFont) == nil,
     "the gap between tabs hit-tests as nothing")
@@ -128,14 +127,14 @@ end
 function test_listFor_filtersByTab()
   local items = {
     { kind = "block", id = 1 },
-    { kind = "sprite", id = "LASS" },
+    { kind = "entity", entityType = "object", obj = { sprite = "LASS" } },
     { kind = "blueprint", id = "bp_1" },
   }
   local tiles = Inventory.listFor(items, 1)
   assert(#tiles == 1 and tiles[1].id == 1, "Tiles tab shows only blocks")
-  local objects = Inventory.listFor(items, 2)
-  assert(#objects == 1 and objects[1].id == "LASS", "Objects tab shows objects")
-  local blueprints = Inventory.listFor(items, 4)
+  local entities = Inventory.listFor(items, 2)
+  assert(#entities == 1 and entities[1].entityType == "object", "Entities tab shows entities")
+  local blueprints = Inventory.listFor(items, 3)
   assert(#blueprints == 1 and blueprints[1].id == "bp_1", "Blueprints tab shows blueprints")
 end
 
@@ -191,12 +190,12 @@ function test_tabClickSwitchesTab()
   assert(s, "no session")
   resetInput()
   Input.inventory = { items = {
-    { kind = "block", id = 1 }, { kind = "warp", destMap = "PALLET_TOWN" },
+    { kind = "block", id = 1 }, { kind = "entity", entityType = "warp", destMap = "PALLET_TOWN" },
   }, tab = 1, scroll = 1 }
-  local tx, ty = tabCentre(3)
+  local tx, ty = tabCentre(2)
   local consumed = Input.mousepressed(s, game, tx, ty, 1)
   assert(consumed, "click on a tab should be consumed")
-  assert(Input.inventory.tab == 3, "tab click should switch to the Warps tab")
+  assert(Input.inventory.tab == 2, "tab click should switch to the Entities tab")
 end
 
 function test_dragDropOntoInventoryAddsItem()
@@ -333,7 +332,7 @@ function test_blueprintCaptureAddsToInventory()
     if it.kind == "blueprint" and it.id == id then bpItem = it end
   end
   assert(bpItem, "captured blueprint should surface in the inventory")
-  assert(Input.inventory.tab == 4, "capture should switch to the Blueprints tab")
+  assert(Input.inventory.tab == 3, "capture should switch to the Blueprints tab")
 end
 
 function test_blueprintCaptureCanSpanVisibleMaps()
@@ -442,7 +441,7 @@ function test_blueprintDragCreatesBlueprintFromInputFlow()
   Input.blockCellAt = orig
   assert(id == true, "release finishes the blueprint capture")
   assert(#Input.inventory.items > 0, "drag release should add a blueprint")
-  assert(Input.inventory.tab == 4, "blueprints tab should be active after capture")
+  assert(Input.inventory.tab == 3, "blueprints tab should be active after capture")
 end
 
 function test_blueprintTwoClickCreatesBlueprintAndClosesTool()

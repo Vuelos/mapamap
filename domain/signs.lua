@@ -55,6 +55,7 @@ end
 -- the new sign or nil when no sprite exists to render with.
 function Signs:placeNewSign(cellX, cellY)
   if not cellIn(self.def, cellX, cellY) then return nil end
+  if self:cellOccupied(cellX, cellY) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.signs = self.def.signs or {}
   local maxIndex = 0
@@ -77,6 +78,8 @@ end
 function Signs:moveSign(obj, cellX, cellY)
   if not obj then return false end
   if not cellIn(self.def, cellX, cellY) then return false end
+  if obj.x == cellX and obj.y == cellY then return true end
+  if self:cellOccupied(cellX, cellY, obj) then return false end
   if self.undo then self.undo:capture(self.def) end
   obj.x, obj.y = cellX, cellY
   self.mapChanged = true

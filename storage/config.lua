@@ -37,8 +37,6 @@ function State.reset(ui)
   ui.selectStart = nil
   ui.selectEnd = nil
   ui._bpMoved = false
-  ui.selectedWarp = nil
-  ui.selectedObject = nil
   ui.warpDestPick = false
   ui.details = nil
   ui.inventory.tab = 1
@@ -64,8 +62,7 @@ function State.onMapEntry(ui, session)
   ui.pickerDropOpen = false
   -- Warp selection / details reference live def.warps entries: drop them on a
   -- session change so they never dangle onto the old map's data.
-  ui.selectedWarp = nil
-  ui.selectedObject = nil
+  ui.SelectedItem = nil
   ui.warpDestPick = false
   ui.details = nil
   if Hotbar.selected(ui) then Hotbar.apply(ui, session) end
@@ -108,25 +105,36 @@ function State.loadInventory(ui, mod)
     end
   end
   -- Ensure template items exist and are first in their tabs.
-  local hasNewWarp, hasNewObject = false, false
+  local hasNewWarp, hasNewObject, hasNewSign = false, false, false
   for _, it in ipairs(ui.inventory.items) do
-    if it.kind == "warp" and it.newWarp then hasNewWarp = true end
-    if it.kind == "object" and it.newObject then hasNewObject = true end
+    if it.kind == "entity" then
+      if it.entityType == "warp" and it.newWarp then hasNewWarp = true end
+      if it.entityType == "object" and it.newObject then hasNewObject = true end
+      if it.entityType == "sign" and it.newSign then hasNewSign = true end
+    end
   end
   local Inventory = require("mods.mapamap.components.inventory")
   if not hasNewWarp then
-    Inventory.add(ui, { kind = "warp", newWarp = true })
+    Inventory.add(ui, { kind = "entity", entityType = "warp", newWarp = true })
   end
   if not hasNewObject then
-    Inventory.add(ui, { kind = "object", newObject = true })
+    Inventory.add(ui, { kind = "entity", entityType = "object", newObject = true })
+  end
+  if not hasNewSign then
+    Inventory.add(ui, { kind = "entity", entityType = "sign", newSign = true })
   end
   -- Push any existing templates to position 1 of their tabs.
-  local function moveTemplateToFront(kind, flag)
+  local function moveTemplateToFront(kind, flag, et)
     for i = #ui.inventory.items, 1, -1 do
       local it = ui.inventory.items[i]
-      if it.kind == kind and it[flag] then
+      local match
+      if et then
+        match = it.kind == kind and it.entityType == et and it[flag]
+      else
+        match = it.kind == kind and it[flag]
+      end
+      if match then
         table.remove(ui.inventory.items, i)
-        -- Find first item of the same tab and insert before it
         local tabIdx = Inventory.tabFor(it)
         local insertPos = 1
         for j, other in ipairs(ui.inventory.items) do
@@ -141,8 +149,9 @@ function State.loadInventory(ui, mod)
       end
     end
   end
-  moveTemplateToFront("warp", "newWarp")
-  moveTemplateToFront("object", "newObject")
+  moveTemplateToFront("entity", "newWarp", "warp")
+  moveTemplateToFront("entity", "newObject", "object")
+  moveTemplateToFront("entity", "newSign", "sign")
 end
 
 return State

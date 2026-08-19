@@ -89,11 +89,12 @@ function Tools.armErase()
   b.lastCellX, b.lastCellY = nil, nil
 end
 
--- RMB press over a warp/object/sign: defer the click-vs-drag decision until the
+-- RMB press over an entity: defer the click-vs-drag decision until the
 -- pointer either stops (Details click) or moves past the threshold (drag).
-function Tools.deferEntityClick(kind, entity, mx, my)
+-- `entityType` is "warp", "object", or "sign".
+function Tools.deferEntityClick(entityType, entity, mx, my)
   local b = Tools.brush
-  b.pendingEntityClick = { kind = kind, entity = entity, mx = mx, my = my }
+  b.pendingEntityClick = { kind = "entity", entityType = entityType, entity = entity, mx = mx, my = my }
   b.erasing = false
   b.painting = false
 end
@@ -140,7 +141,7 @@ function Tools.maybeDragEntity(session, mx, my)
     ox = mapOx or 0
     oy = mapOy or 0
   end
-  b.draggingEntity = { kind = pc.kind, entity = pc.entity, ox = ox, oy = oy }
+  b.draggingEntity = { kind = pc.kind, entityType = pc.entityType, entity = pc.entity, ox = ox, oy = oy }
   Tools.draggingEntity = b.draggingEntity
   return true
 end

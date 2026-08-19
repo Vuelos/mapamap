@@ -48,6 +48,7 @@ end
 -- `destWarp` (0-based, the engine's numbering).  Returns the warp or nil.
 function Warps.placeWarp(self, cellX, cellY, destMap, destWarp)
   if not cellIn(self.def, cellX, cellY) then return nil end
+  if self:cellOccupied(cellX, cellY) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.warps = self.def.warps or {}
   local w = { x = cellX, y = cellY,
@@ -61,6 +62,8 @@ end
 function Warps.moveWarp(self, warp, cellX, cellY)
   if not warp then return false end
   if not cellIn(self.def, cellX, cellY) then return false end
+  if warp.x == cellX and warp.y == cellY then return true end
+  if self:cellOccupied(cellX, cellY, warp) then return false end
   if self.undo then self.undo:capture(self.def) end
   warp.x, warp.y = cellX, cellY
   self.mapChanged = true

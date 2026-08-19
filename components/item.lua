@@ -5,9 +5,8 @@
 --   { kind = "sprite", id = <string> }                 NPC / object sprite id
 --   { kind = "item", id = <string> }                   pickable map item (data.items id)
 --   { kind = "blueprint", id, w, h, tiles }            captured block grid
---   { kind = "warp", warp|destMap, destWarp }          live warp tool / new-warp template
---   { kind = "object", obj|newObject }                 live map object / new-object template
---
+--   { kind = "entity", entityType = "warp"|"object"|"sign",
+--           newWarp | newObject | newSign, warp|obj|sign }  entity tool / template
 -- Blocks are drawn straight from the map renderer's tile atlas (or the owning
 -- tileset's bundle when they came from a foreign tileset); sprites from a
 -- lazily-built SpriteRenderer; blueprints from the renderer quads scaled to
@@ -158,62 +157,69 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
     return true
   end
 
-  if item.kind == "warp" then
-    -- Warp entries render as a blue-filled circle with a white ring, matching
-    -- the entity-marker style used in the world overlay (blue = warp).  The
-    -- "new warp" template cell draws a green plus so it reads as a builder.
-    if item.newWarp then
-      love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
-      love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      love.graphics.setColor(1, 1, 1, 0.9 * A)
-      love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
-        x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
-      love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
-        x + boxSize / 2, y + boxSize / 2 + boxSize / 6)
-    else
-      love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
-      love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      love.graphics.setColor(1, 1, 1, 0.85 * A)
-      love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-    end
-    love.graphics.setColor(1, 1, 1, A)
-    if session.font and item.newWarp then
-      session.font.draw("NEW", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
-    elseif session.font and item.destMap then
-      session.font.draw(item.destMap, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
-    end
-    return true
-  end
-
-  if item.kind == "object" then
-    -- Object cells: the "new object" template is a green plus builder; live
-    -- map objects reuse the sprite/item thumbnail so the cell shows exactly
-    -- what placing it copies, else a green disc with the object's name.
-    if item.newObject then
-      love.graphics.setColor(0.2, 0.8, 0.35, 0.7 * A)
-      love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      love.graphics.setColor(1, 1, 1, 0.9 * A)
-      love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
-        x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
-      love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
-        x + boxSize / 2, y + boxSize / 2 + boxSize / 6)
-      if session.font then
+  if item.kind == "entity" then
+    local et = item.entityType
+    if et == "warp" then
+      if item.newWarp then
+        love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
+        love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+        love.graphics.setColor(1, 1, 1, 0.9 * A)
+        love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
+          x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
+        love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
+          x + boxSize / 2, y + boxSize / 2 + boxSize / 6)
+      else
+        love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
+        love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+        love.graphics.setColor(1, 1, 1, 0.85 * A)
+        love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+      end
+      love.graphics.setColor(1, 1, 1, A)
+      if session.font and item.newWarp then
         session.font.draw("NEW", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+      elseif session.font and item.destMap then
+        session.font.draw(item.destMap, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
       end
       return true
     end
-    local o = item.obj
-    if o and o.sprite and session.data and session.data.sprites[o.sprite] then
-      return Item.draw(session, { kind = "sprite", id = o.sprite }, x, y, boxSize, nil, A)
+    if et == "object" then
+      if item.newObject then
+        love.graphics.setColor(0.2, 0.8, 0.35, 0.7 * A)
+        love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+        love.graphics.setColor(1, 1, 1, 0.9 * A)
+        love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
+          x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
+        love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
+          x + boxSize / 2, y + boxSize / 2 + boxSize / 6)
+        if session.font then
+          session.font.draw("NEW", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+        end
+        return true
+      end
+      local o = item.obj
+      if o and o.sprite and session.data and session.data.sprites[o.sprite] then
+        return Item.draw(session, { kind = "sprite", id = o.sprite }, x, y, boxSize, nil, A)
+      end
+      love.graphics.setColor(0.35, 0.8, 0.4, 0.65 * A)
+      love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+      love.graphics.setColor(1, 1, 1, 0.85 * A)
+      love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+      if session.font and item.name then
+        session.font.draw(item.name, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+      end
+      return true
     end
-    love.graphics.setColor(0.35, 0.8, 0.4, 0.65 * A)
-    love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-    love.graphics.setColor(1, 1, 1, 0.85 * A)
-    love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-    if session.font and item.name then
-      session.font.draw(item.name, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+    if et == "sign" then
+      love.graphics.setColor(1, 0.55, 0.2, 0.7 * A)
+      love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+      love.graphics.setColor(1, 1, 1, 0.85 * A)
+      love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+      if session.font and item.sign and item.sign.label then
+        session.font.draw(item.sign.label, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+      end
+      return true
     end
-    return true
+    return false
   end
 
   if item.kind == "item" then

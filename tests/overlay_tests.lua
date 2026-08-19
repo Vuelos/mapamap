@@ -227,7 +227,8 @@ function test_worldMarkersHiddenByStackAbove()
   end
 
   -- Bare overworld: cursor accent, current-map border ring and warp circles
-  -- all draw.
+  -- all draw (borders toggle must be on for the ring to render).
+  Input.showMapBorders = true
   local bare = markerGame(nil)
   local markers = recordingColors(function()
     withTransform(flatTransform(), function() Overlay.draw(s, bare, nil) end)

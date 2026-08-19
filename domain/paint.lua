@@ -55,31 +55,35 @@ function Paint.paintAt(ui, brush, session, mx, my)
     return session:placeItem(item.id)
   end
 
-  -- Warps place a warp wired to the tool's destination (a copy), or a
-  -- single fresh warp (self-destination) via the "new warp" template.
-  if item.kind == "warp" then
+  -- Entities place a warp / object / sign at the cursor depending on entityType.
+  if item.kind == "entity" then
     session.cursorBx = tx
     session.cursorBy = ty
-    if item.newWarp then
-      return session:placeWarp(tx, ty) ~= nil
-    end
-    return session:placeWarp(tx, ty, item.destMap, item.destWarp) ~= nil
-  end
-
-  -- Objects place a deep copy of the selected map object at the cursor (the
-  -- "copy from the map" tool), or a fresh simple NPC via the template.
-  if item.kind == "object" then
-    session.cursorBx = tx
-    session.cursorBy = ty
-    if item.newObject then
-      local o = session:placeNewObject(tx, ty)
-      if o then
-        session.selectedObject = o
-        Details.open(ui, session, { object = o })
+    local et = item.entityType
+    if et == "warp" then
+      if item.newWarp then
+        return session:placeWarp(tx, ty) ~= nil
       end
-      return o ~= nil
+      return session:placeWarp(tx, ty, item.destMap, item.destWarp) ~= nil
+    elseif et == "object" then
+      if item.newObject then
+        local o = session:placeNewObject(tx, ty)
+        if o then
+          session.selectedItem = o
+          Details.open(ui, session, { entity = o, entityType = "object" })
+        end
+        return o ~= nil
+      end
+      return session:placeObjectCopy(tx, ty, item.obj) ~= nil
+    elseif et == "sign" then
+      local s = session:placeNewSign(tx, ty)
+      if s then
+        session.selectedItem = s
+        Details.open(ui, session, { entity = s, entityType = "sign" })
+      end
+      return s ~= nil
     end
-    return session:placeObjectCopy(tx, ty, item.obj) ~= nil
+    return false
   end
 
   -- Blueprints stamp a block grid at the cursor block.
@@ -130,10 +134,24 @@ function Paint.eraseAt(ui, brush, session, mx, my)
   if tx == brush.lastCellX and ty == brush.lastCellY then return false end
   brush.lastCellX, brush.lastCellY = tx, ty
   local item = Hotbar.selected(ui)
-  if item and (item.kind == "sprite" or item.kind == "object") then
+  if item and (item.kind == "sprite" or item.kind == "entity") then
     session.cursorBx = tx
     session.cursorBy = ty
-    return session:eraseObjectsAtCell()
+    if item.kind == "entity" then
+      local et = item.entityType
+      if et == "warp" then
+        local w = session:warpAt(tx, ty)
+        if w then session:removeWarp(w) end
+      elseif et == "object" then
+        session:eraseObjectsAtCell()
+      elseif et == "sign" then
+        session:eraseSignsAtCell()
+      end
+    else
+      session:eraseObjectsAtCell()
+    end
+    session:refreshLiveRenderers()
+    return session.mapChanged
   end
   session.cursorBx = tx - (tx % 2)
   session.cursorBy = ty - (ty % 2)
@@ -152,7 +170,7 @@ function Paint.destPick(ui, session, mx, my)
   local tx, ty = Coords.toWorldCell(t, mx, my)
   local mapId, def, ox, oy = Neighbors.mapAt(session.def, session.neighbors, tx, ty)
   if def then
-    if session:connectWarpToCell(session.selectedWarp,
+    if session:connectWarpToCell(session.selectedItem,
        mapId or session.mapId, tx - (ox or 0) / 16, ty - (oy or 0) / 16) then
       ui.warpDestPick = false
     end

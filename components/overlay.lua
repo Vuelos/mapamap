@@ -70,9 +70,9 @@ local function drawCursor(session, game)
   end
   local x, y, w, h
   if item and (item.kind == "sprite" or item.kind == "item"
-       or item.kind == "warp" or item.kind == "object" 
+       or item.kind == "entity"
        or Input.mouseHoveringSingleCellItem(session)) then
-    -- Sprites/warps/objects place on a single 1x1 cell (map-object coords are
+    -- Sprites/entities place on a single 1x1 cell (map-object coords are
     -- walk-grid cells); blocks are 2x2 cells.
     x, y, w, h = Coords.cellRect(t, session.cursorBx, session.cursorBy)
   else
@@ -94,9 +94,9 @@ local function drawCursor(session, game)
   love.graphics.setColor(1, 1, 1, 0.95)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", x, y, w, h)
-  -- green accent for sprites so placement vs block-paint is obvious
+  -- green accent for sprites/entities so placement vs block-paint is obvious
   if item and (item.kind == "sprite" or item.kind == "item"
-       or item.kind == "warp" or item.kind == "object") then
+       or item.kind == "entity") then
     love.graphics.setColor(0.3, 1, 0.4, 0.9)
   else
     love.graphics.setColor(1, 0.9, 0.3, 0.9)
@@ -282,14 +282,14 @@ local function drawEntityMarkers(session, game, getVisible, style)
     local x, y = Coords.toScreen(t, e.ox + entity.x * 16, e.oy + entity.y * 16)
     if x then
       local cx, cy = x + 8 * t.sx, y + 8 * t.sy
-      local selected = entity == session[style.selectedField]
-      love.graphics.setColor(unpack(style.fillColor))
+      local selected = entity == session.selectedItem
+      love.graphics.setColor(style.fillColor)
       love.graphics.circle("fill", cx, cy, r)
-      love.graphics.setColor(unpack(style.outlineColor))
+      love.graphics.setColor(style.outlineColor)
       love.graphics.setLineWidth(1)
       love.graphics.circle("line", cx, cy, r)
       if selected then
-        love.graphics.setColor(unpack(style.selectedColor))
+        love.graphics.setColor(style.selectedColor)
         love.graphics.setLineWidth(2)
         love.graphics.circle("line", cx, cy, r + 3 * t.sx)
       end
@@ -317,7 +317,6 @@ end
 
 local WARP_STYLE = {
   key = "warp",
-  selectedField = "selectedWarp",
   fillColor = { 0.2, 0.45, 1, 0.85 },
   outlineColor = { 1, 1, 1, 0.95 },
   selectedColor = { 1, 0.9, 0.3, 0.95 },
@@ -341,7 +340,6 @@ Overlay._visibleObjects = makeVisibleGetter("objects", "visibleObjects", "object
 
 local OBJECT_STYLE = {
   key = "object",
-  selectedField = "selectedObject",
   fillColor = { 0.2, 0.9, 0.3, 0.7 },
   outlineColor = { 1, 1, 1, 0.95 },
   selectedColor = { 1, 0.9, 0.3, 0.95 },
@@ -361,7 +359,6 @@ Overlay._visibleSigns = makeVisibleGetter("signs", "visibleSigns", "sign")
 
 local SIGN_STYLE = {
   key = "sign",
-  selectedField = "selectedSign",
   fillColor = { 1, 0.55, 0.2, 0.85 },
   outlineColor = { 1, 1, 1, 0.95 },
   selectedColor = { 1, 0.9, 0.3, 0.95 },
@@ -394,14 +391,19 @@ local function drawEntityDrag(session, game)
   if not sx then return end
   local cx, cy = sx + 8 * t.sx, sy + 8 * t.sy
   local r = 6 * t.sx
-  if drag.kind == "warp" then
+  if drag.kind == "entity" and drag.entityType == "warp" then
     love.graphics.setColor(0.2, 0.7, 1, 0.55)
     love.graphics.circle("fill", cx, cy, r)
     love.graphics.setColor(1, 1, 1, 0.6)
     love.graphics.setLineWidth(1)
     love.graphics.circle("line", cx, cy, r)
+  elseif drag.kind == "entity" and drag.entityType == "sign" then
+    love.graphics.setColor(1, 0.55, 0.2, 0.55)
+    love.graphics.circle("fill", cx, cy, r)
+    love.graphics.setColor(1, 1, 1, 0.6)
+    love.graphics.setLineWidth(1)
+    love.graphics.circle("line", cx, cy, r)
   else
-    -- Object ghost: small filled square (NPC marker style).
     local s = 10 * t.sx
     love.graphics.setColor(0.2, 0.9, 0.3, 0.5)
     love.graphics.rectangle("fill", cx - s / 2, cy - s, s, s)

@@ -57,34 +57,37 @@ function Details.build(session, target)
     add("size", "Size", (def and def.width and def.height)
       and (def.width .. "x" .. def.height) or "-", "readonly")
     add("encounters", "Encounters", "", "action")
-  elseif target and target.warp then
-    local w = target.warp
-    add("pos", "Pos", (w.x ~= nil and w.y ~= nil) and (w.x .. "," .. w.y) or "-",
-      "readonly")
-    add("destMap", "Dest map", w.destMap or "?", "text")
-    add("destWarp", "Warp #", tostring(w.destWarp or 0), "number")
-    add("label", "Label", w.label or "", "text")
-    add("delete", "DELETE", "", "action")
-  elseif target and target.sign then
-    local s = target.sign
-    add("type", "Type", "SIGN", "readonly")
-    add("label", "Label", (s.label ~= nil and s.label ~= "") and s.label or "New Sign", "text")
-    add("text", "Text", s.text or "", "text")
-    add("pos", "Pos", (s.x ~= nil and s.y ~= nil) and (s.x .. "," .. s.y) or "-",
-      "readonly")
-    add("delete", "DELETE", "", "action")
-  elseif target and target.object then
-    local o = target.object
-    add("type", "Type", (o.object_type or "OBJECT"):upper(), "readonly")
-    if o.object_type == "item" then
-      add("name", "Name", o.item or o.label or "", "readonly")
-    else
-      add("name", "Name", (o.label ~= nil and o.label ~= "") and o.label
-        or o.sprite or "New Object", "text")
+  elseif target and target.entity then
+    local et = target.entityType
+    if et == "warp" then
+      local w = target.entity
+      add("pos", "Pos", (w.x ~= nil and w.y ~= nil) and (w.x .. "," .. w.y) or "-",
+        "readonly")
+      add("destMap", "Dest map", w.destMap or "?", "text")
+      add("destWarp", "Warp #", tostring(w.destWarp or 0), "number")
+      add("label", "Label", w.label or "", "text")
+      add("delete", "DELETE", "", "action")
+    elseif et == "object" then
+      local o = target.entity
+      add("type", "Type", (o.object_type or "OBJECT"):upper(), "readonly")
+      if o.object_type == "item" then
+        add("name", "Name", o.item or o.label or "", "readonly")
+      else
+        add("name", "Name", (o.label ~= nil and o.label ~= "") and o.label
+          or o.sprite or "New Object", "text")
+      end
+      add("pos", "Pos", (o.x ~= nil and o.y ~= nil) and (o.x .. "," .. o.y) or "-",
+        "readonly")
+      add("delete", "DELETE", "", "action")
+    elseif et == "sign" then
+      local s = target.entity
+      add("type", "Type", "SIGN", "readonly")
+      add("label", "Label", (s.label ~= nil and s.label ~= "") and s.label or "New Sign", "text")
+      add("text", "Text", s.text or "", "text")
+      add("pos", "Pos", (s.x ~= nil and s.y ~= nil) and (s.x .. "," .. s.y) or "-",
+        "readonly")
+      add("delete", "DELETE", "", "action")
     end
-    add("pos", "Pos", (o.x ~= nil and o.y ~= nil) and (o.x .. "," .. o.y) or "-",
-      "readonly")
-    add("delete", "DELETE", "", "action")
   else
     local it = target and target.item
     if not it then return fields end
@@ -105,20 +108,23 @@ end
 -- Panel title for a target.
 function Details.title(state)
   local t = state and state.target
-  if t and t.warp then
-    local w = t.warp
-    return ("WARP %d,%d"):format(w.x or 0, w.y or 0)
-  end
-  if t and t.object then
-    local o = t.object
-    local n = (o.label ~= nil and o.label ~= "") and o.label
-      or o.sprite or o.item or "OBJECT"
-    return (o.object_type or "OBJECT"):upper() .. " " .. tostring(n)
-  end
-  if t and t.sign then
-    local s = t.sign
-    local n = (s.label ~= nil and s.label ~= "") and s.label or "New Sign"
-    return "SIGN " .. tostring(n)
+  if t and t.entity then
+    local et = t.entityType
+    if et == "warp" then
+      local w = t.entity
+      return ("WARP %d,%d"):format(w.x or 0, w.y or 0)
+    end
+    if et == "object" then
+      local o = t.entity
+      local n = (o.label ~= nil and o.label ~= "") and o.label
+        or o.sprite or o.item or "OBJECT"
+      return (o.object_type or "OBJECT"):upper() .. " " .. tostring(n)
+    end
+    if et == "sign" then
+      local s = t.entity
+      local n = (s.label ~= nil and s.label ~= "") and s.label or "New Sign"
+      return "SIGN " .. tostring(n)
+    end
   end
   if t and t.map then
     return "MAP " .. tostring(t.mapId or "")
@@ -183,15 +189,18 @@ local function applyToMap(session, d, key, value)
   return false
 end
 
--- Commits an edited value to the active field (writes through to the warp /
--- item / object).  Refreshes the field's display value on success.
+-- Commits an edited value to the active field (writes through to the entity /
+-- item / map).  Refreshes the field's display value on success.
 function Details.commit(session, d, fieldIdx, value)
   local f = d and d.fields and d.fields[fieldIdx]
   if not f then return false end
   local ok
-  if d.warp then ok = applyToWarp(session, d, f.key, value)
-  elseif d.object then ok = applyToObject(session, d, f.key, value)
-  elseif d.sign then ok = applyToSign(session, d, f.key, value)
+  if d.entity then
+    local et = d.entityType
+    if et == "warp" then ok = applyToWarp(session, d, f.key, value)
+    elseif et == "object" then ok = applyToObject(session, d, f.key, value)
+    elseif et == "sign" then ok = applyToSign(session, d, f.key, value)
+    end
   elseif d.map then ok = applyToMap(session, d, f.key, value)
   else ok = applyToItem(d, f.key, value) end
   if ok then f.value = value end
@@ -224,18 +233,20 @@ function Details.activate(ui, session, d)
   end
 end
 
--- Deletes the target (warp / object from the map, or the item from the
--- inventory).
+-- Deletes the target (entity from the map, or the item from the inventory).
 function Details.delete(ui, session, d)
   if not d then return end
-  if d.warp then
-    session:removeWarp(d.warp)
-    if session.selectedWarp == d.warp then session.selectedWarp = nil end
-  elseif d.object then
-    session:removeObject(d.object)
-  elseif d.sign then
-    session:removeSign(d.sign)
-    if session.selectedSign == d.sign then session.selectedSign = nil end
+  if d.entity then
+    local et = d.entityType
+    if et == "warp" then
+      session:removeWarp(d.entity)
+      if session.selectedItem == d.entity then session.selectedItem = nil end
+    elseif et == "object" then
+      session:removeObject(d.entity)
+    elseif et == "sign" then
+      session:removeSign(d.entity)
+      if session.selectedItem == d.entity then session.selectedItem = nil end
+    end
   elseif d.item then
     for i = #(ui.inventory.items or {}), 1, -1 do
       if ui.inventory.items[i] == d.item then
@@ -253,9 +264,8 @@ end
 function Details.open(ui, session, target)
   ui.details = {
     target = target,
-    warp = target.warp,
-    object = target.object,
-    sign = target.sign,
+    entity = target.entity,
+    entityType = target.entityType,
     item = target.item,
     map = target.map,
     mapId = target.mapId,
@@ -270,19 +280,22 @@ function Details.close(ui)
   ui.details = nil
 end
 
--- The Details target for an inventory cell: a live warp / object entry opens
+-- The Details target for an inventory cell: a live entity entry opens
 -- the live map entry, anything else opens the stored cell itself.
 function Details.openForItem(ui, session, item)
   if not item then return end
-  if item.kind == "warp" and item.warp then
-    session.selectedWarp = item.warp
-    Details.open(ui, session, { warp = item.warp })
-  elseif item.kind == "object" and item.obj then
-    session.selectedObject = item.obj
-    Details.open(ui, session, { object = item.obj })
-  elseif item.kind == "sign" and item.sign then
-    session.selectedSign = item.sign
-    Details.open(ui, session, { sign = item.sign })
+  if item.kind == "entity" then
+    local et = item.entityType
+    if et == "warp" and item.warp then
+      session.selectedItem = item.warp
+      Details.open(ui, session, { entity = item.warp, entityType = "warp" })
+    elseif et == "object" and item.obj then
+      session.selectedItem = item.obj
+      Details.open(ui, session, { entity = item.obj, entityType = "object" })
+    elseif et == "sign" and item.sign then
+      session.selectedItem = item.sign
+      Details.open(ui, session, { entity = item.sign, entityType = "sign" })
+    end
   else
     Details.open(ui, session, { item = item })
   end

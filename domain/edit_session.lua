@@ -323,4 +323,20 @@ function EditSession:cellInsideNeighbor(cellX, cellY)
   return false
 end
 
+-- True when a warp, object, or sign already occupies this cell on the edited
+-- map.  `exclude` is an optional entity table to skip (used by move operations
+-- so an entity can return to its own cell).
+function EditSession:cellOccupied(cellX, cellY, exclude)
+  for _, w in ipairs(self.def.warps or {}) do
+    if w ~= exclude and (w.x or -1) == cellX and (w.y or -1) == cellY then return true end
+  end
+  for _, o in ipairs(self.def.objects or {}) do
+    if o ~= exclude and (o.x or -1) == cellX and (o.y or -1) == cellY then return true end
+  end
+  for _, s in ipairs(self.def.signs or {}) do
+    if s ~= exclude and (s.x or -1) == cellX and (s.y or -1) == cellY then return true end
+  end
+  return false
+end
+
 return EditSession

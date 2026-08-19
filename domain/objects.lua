@@ -52,6 +52,7 @@ end
 function Objects:placeObjectCopy(cellX, cellY, sample)
   if not cellIn(self.def, cellX, cellY) then return nil end
   if not (sample and sample.object_type) then return nil end
+  if self:cellOccupied(cellX, cellY) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.objects = self.def.objects or {}
   local maxIndex = 0
@@ -75,6 +76,7 @@ end
 -- the new object or nil when no sprite exists to render with.
 function Objects:placeNewObject(cellX, cellY)
   if not cellIn(self.def, cellX, cellY) then return nil end
+  if self:cellOccupied(cellX, cellY) then return nil end
   local spriteId
   for id in pairs(self.data.sprites or {}) do spriteId = id; break end
   if not spriteId then return nil end
@@ -164,6 +166,8 @@ end
 function Objects:moveObject(obj, cellX, cellY)
   if not obj then return false end
   if not cellIn(self.def, cellX, cellY) then return false end
+  if obj.x == cellX and obj.y == cellY then return true end
+  if self:cellOccupied(cellX, cellY, obj) then return false end
   if self.undo then self.undo:capture(self.def) end
   obj.x, obj.y = cellX, cellY
   self.mapChanged = true

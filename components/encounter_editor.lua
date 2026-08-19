@@ -2,9 +2,9 @@
 -- (grass/water/indoor rates and species/level slots).
 --
 -- Press N while the overlay is open to toggle it.  Tabs switch between
--- Grass / Water / Indoor groups (Tab key or click).  Up/Down navigate rows,
+-- Grass / Water / Indoor groups (mouse click only).  Up/Down navigate rows,
 -- Enter opens the species dropdown or commits level input, A adds a slot,
--- X removes the active slot, Escape closes.
+-- X removes the active slot, Escape or N closes.
 
 local Inventory = require("mods.mapamap.components.inventory")
 local Panel = require("mods.mapamap.components.panel")
@@ -413,14 +413,6 @@ function EncEditor.key(ui, session, key)
   elseif key == "down" then
     d.index = math.min(#(d.fields or {}), d.index + 1)
     return true
-  elseif key == "tab" then
-    d.tab = (d.tab % #GROUPS) + 1
-    d.index = 1
-    d.levelEdit = nil
-    d.rateEdit = nil
-    d.dropdown = nil
-    rebuild(ui)
-    return true
   elseif key == "left" or key == "right" then
     local f = d.fields and d.fields[d.index]
     if not f then return true end
@@ -452,6 +444,9 @@ function EncEditor.key(ui, session, key)
     end
     return true
   elseif key == "escape" then
+    ui.encEditor = nil
+    return true
+  elseif key == "n" then
     ui.encEditor = nil
     return true
   end
@@ -565,7 +560,7 @@ function EncEditor.draw(session, state, vw, vh, font)
   elseif state.levelEdit then
     hint = "Type digits (1-100)  Enter: ok  Esc: cancel"
   else
-    hint = "Tab: group  Up/Down: row  Enter: edit  A: add  X: del  Esc: close"
+    hint = "Left/Right: group  Up/Down: row  Enter: edit  A: add  X: del  N/Esc: close"
   end
   Panel.drawHint(font, hint, x, y, w, h)
   Panel.resetColor()

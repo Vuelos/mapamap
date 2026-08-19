@@ -26,8 +26,7 @@ Inventory.SIDE_GAP = 10      -- gap between the inventory and the side panel
 
 Inventory.TABS = {
   { key = "tiles", label = "Tiles" },
-  { key = "objects", label = "Objects" },
-  { key = "warps", label = "Warps" },
+  { key = "entities", label = "Entities" },
   { key = "blueprints", label = "Blueprints" },
 }
 
@@ -35,9 +34,8 @@ Inventory.TABS = {
 function Inventory.tabFor(item)
   local k = item and item.kind
   if k == "block" then return 1 end
-  if k == "sprite" or k == "item" then return 2 end
-  if k == "warp" then return 3 end
-  if k == "blueprint" then return 4 end
+  if k == "entity" or k == "sprite" or k == "item" then return 2 end
+  if k == "blueprint" then return 3 end
   return 2
 end
 
@@ -133,24 +131,23 @@ end
 
 -- The panel's display list for the active tab. Inventory is only the saved
 -- collection; live current-map content is owned by separate components.
--- For Objects and Warps tabs, templates are always shown first.
+-- For Entities tab (2), templates are always shown first.
 function Inventory.tabList(session, state)
   local tab = (state and state.tab) or 1
   local items = state and state.items
   local list = Inventory.listFor(items, tab)
   
-  -- For Objects tab (2) and Warps tab (3), sort to show templates first
-  if tab == 2 or tab == 3 then
+  -- For Entities tab (2), sort to show templates first
+  if tab == 2 then
     local templates = {}
     local others = {}
     for _, item in ipairs(list) do
-      if (tab == 2 and item.newObject) or (tab == 3 and item.newWarp) then
+      if item.kind == "entity" and (item.newWarp or item.newObject or item.newSign) then
         table.insert(templates, item)
       else
         table.insert(others, item)
       end
     end
-    -- Return templates first, then other items
     for _, item in ipairs(others) do
       table.insert(templates, item)
     end
@@ -161,11 +158,11 @@ function Inventory.tabList(session, state)
 end
 
 -- Adds an item to the inventory, switching to its tab and scrolling so the
--- newest entry is visible.  Template items (newWarp / newObject) are always
--- inserted as the first element of their tab.
+-- newest entry is visible.  Template items (newWarp / newObject / newSign) are
+-- always inserted as the first element of their tab.
 function Inventory.add(ui, item)
   if not item then return end
-  local isTemplate = item.newWarp or item.newObject
+  local isTemplate = item.newWarp or item.newObject or item.newSign
   if isTemplate then
     -- Find the first item belonging to the same tab and insert before it
     -- so the template is always first in that tab's filtered list.
