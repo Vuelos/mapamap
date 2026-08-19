@@ -70,6 +70,7 @@ end
 -- Creates a session editing `mapId`. Returns the session or nil when the
 -- map or its tileset cannot be loaded.
 function EditSession.new(mod, game, mapId, data)
+  if not data and game then data = game.data end
   if not (data and data.maps) then return nil end
   local def = data.maps[mapId]
   if not def then return nil end
@@ -163,6 +164,7 @@ end
 -- shows up on screen without waiting for the player to step off the map.
 function EditSession:rebuildWorldNeighbors()
   self:rebuildNeighbors()
+  WorldAdapter.rebuildRuntimeNeighbors(self)
   self:refreshLiveRenderers()
 end
 

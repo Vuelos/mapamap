@@ -49,6 +49,26 @@ function WorldAdapter.refreshLiveRenderers(session)
   Gen.rebuildRenderer(session.map)
 end
 
+-- Makes the runtime overworld's neighbor strip set include maps that the
+-- editor just created or wired (new _EXT maps, fresh connections).  The
+-- session's own `neighbors` list (EditorNeighbors) is editor-side only; the
+-- engine draws non-current maps as neighbor strips from ITS list, which is
+-- rebuilt only on zoom/map-change -- so a freshly created map never appears
+-- (and later edits to it never refresh) until the player zooms or re-enters.
+-- Gen 1 may rebuild inline safely; Gen 2 bakes canvases inside
+-- rebuildNeighbors, so it is deferred to the draw frame (see flushLiveRebuild
+-- and the CRITICAL note in refreshLiveRenderers).
+function WorldAdapter.rebuildRuntimeNeighbors(session)
+  local ow = session.game and Gen.overworld(session.game)
+  if not ow then return end
+  if Gen.isGen2() then
+    session._needsLiveRebuild = true
+    session._needsNeighborRebuild = true
+    return
+  end
+  if ow.rebuildNeighbors then pcall(ow.rebuildNeighbors, ow) end
+end
+
 -- Flushes a deferred live-World rebake (set by refreshLiveRenderers on Gen 2).
 -- Called from the render.hud hook in the DRAW frame, never from an input event.
 function WorldAdapter.flushLiveRebuild(session)
@@ -76,6 +96,15 @@ function WorldAdapter.flushLiveRebuild(session)
   if ow.imageFor then
     local ok, img = pcall(ow.imageFor, ow, session.mapId)
     if ok and img then ow.mapImage = img end
+  end
+  -- A new map / new connection needs the full runtime neighbor set re-derived
+  -- (rebuildNeighbors re-bakes every strip via imageFor, picking up the fresh
+  -- graph node).  Kept on failure so a later frame retries.
+  if session._needsNeighborRebuild then
+    if ow.rebuildNeighbors and pcall(ow.rebuildNeighbors, ow) then
+      session._needsNeighborRebuild = false
+    end
+    return
   end
   -- Update dirty neighbor images in place so their canvases stay current
   -- without recomputing the full neighbor list.
@@ -172,6 +201,7 @@ function WorldAdapter.createAdjacentMap(session, side)
   session._newMaps = session._newMaps or {}
   session._newMaps[newId] = Common.deepCopy(session.data.maps[newId])
   session:rebuildNeighbors()
+  WorldAdapter.rebuildRuntimeNeighbors(session)
   local data = session.data
   local newDef = data.maps[newId]
   local tileset = data.tilesets[newDef.tileset]
