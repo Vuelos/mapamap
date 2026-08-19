@@ -70,7 +70,8 @@ local function drawCursor(session, game)
   end
   local x, y, w, h
   if item and (item.kind == "sprite" or item.kind == "item"
-       or item.kind == "warp" or item.kind == "object") then
+       or item.kind == "warp" or item.kind == "object" 
+       or Input.mouseHoveringSingleCellItem(session)) then
     -- Sprites/warps/objects place on a single 1x1 cell (map-object coords are
     -- walk-grid cells); blocks are 2x2 cells.
     x, y, w, h = Coords.cellRect(t, session.cursorBx, session.cursorBy)
@@ -231,7 +232,78 @@ local function drawBlueprintPreview(session, game)
   love.graphics.setColor(1, 1, 1, 1)
 end
 
--- --- warp circles + destination-pick crosshair ------------------------------
+-- --- shared runtime-frame entity collector --------------------------------
+--
+-- Builds a getter like `visibleWarps` / `visibleObjects` / `visibleSigns`
+-- from a def field name, the session fallback method, and the key used in the
+-- returned record (`warp`, `object`, `sign`).  The runtime frame (ow.map +
+-- ow.neighbors at their strip offsets) is preferred so markers stay glued to
+-- their tiles across a border cross; the session's own layout is the fallback
+-- when no live overworld is available.
+
+local function makeVisibleGetter(field, sessionMethod, resultKey)
+  return function(session, game)
+    if worldObscured(game) then return {} end
+    local ow = game and (game.overworld or game.world)
+    local out = {}
+    local function collect(def, ox, oy)
+      for _, e in ipairs(def and def[field] or {}) do
+        out[#out + 1] = { [resultKey] = e, ox = ox, oy = oy }
+      end
+    end
+    if ow and ow.map and ow.map.def then
+      collect(ow.map.def, 0, 0)
+      for _, nb in ipairs(ow.neighbors or {}) do
+        if nb and nb.map and nb.map.def then
+          collect(nb.map.def, nb.ox, nb.oy)
+        elseif nb and nb.id and nb.ox ~= nil then
+          local def = session.data and session.data.maps and session.data.maps[nb.id]
+          collect(def, nb.ox, nb.oy)
+        end
+      end
+    else
+      local fallback = session[sessionMethod]
+      if type(fallback) == "function" then
+        for _, e in ipairs(fallback(session)) do out[#out + 1] = e end
+      end
+    end
+    return out
+  end
+end
+
+-- Generic marker drawer.  `getVisible` is one of the visible* getters; `style`
+-- controls colours, and which entity field carries the label text.
+local function drawEntityMarkers(session, game, getVisible, style)
+  local t = Coords.transform(game)
+  if not t then return end
+  local r = 6 * t.sx
+  for _, e in ipairs(getVisible(session, game)) do
+    local entity = e[style.key]
+    local x, y = Coords.toScreen(t, e.ox + entity.x * 16, e.oy + entity.y * 16)
+    if x then
+      local cx, cy = x + 8 * t.sx, y + 8 * t.sy
+      local selected = entity == session[style.selectedField]
+      love.graphics.setColor(unpack(style.fillColor))
+      love.graphics.circle("fill", cx, cy, r)
+      love.graphics.setColor(unpack(style.outlineColor))
+      love.graphics.setLineWidth(1)
+      love.graphics.circle("line", cx, cy, r)
+      if selected then
+        love.graphics.setColor(unpack(style.selectedColor))
+        love.graphics.setLineWidth(2)
+        love.graphics.circle("line", cx, cy, r + 3 * t.sx)
+      end
+      local label = entity[style.labelField]
+      if label and label ~= "" then
+        love.graphics.setColor(1, 1, 1, 0.9)
+        Text.label(session.font, label, cx + r + 2, cy - r - 8, 1, {
+          bg = { 0.1, 0.1, 0.15, 0.75 }, padX = 2, padY = 1,
+        })
+      end
+    end
+  end
+  love.graphics.setColor(1, 1, 1, 1)
+end
 
 -- Every warp to draw, in the frame the world is CURRENTLY rendered in.  The
 -- overworld re-anchors the world to the map it is drawing (ow.map at offset
@@ -240,31 +312,19 @@ end
 -- glued to their tiles until the session reconciles on the next input event.
 -- Falls back to the session's own layout when no live overworld is available.
 function Overlay.visibleWarps(session, game)
-  -- A dialog/battle/menu on top of the overworld hides the warp circles: the
-  -- markers would draw over the game's own UI, not the map.
-  if worldObscured(game) then return {} end
-  local ow = game and (game.overworld or game.world)
-  local out = {}
-  local function collect(def, ox, oy)
-    for _, w in ipairs(def and def.warps or {}) do
-      out[#out + 1] = { warp = w, ox = ox, oy = oy }
-    end
-  end
-  if ow and ow.map and ow.map.def then
-    collect(ow.map.def, 0, 0)
-    for _, nb in ipairs(ow.neighbors or {}) do
-      if nb and nb.map and nb.map.def then
-        collect(nb.map.def, nb.ox, nb.oy)
-      elseif nb and nb.id and nb.ox ~= nil then
-        local def = session.data and session.data.maps and session.data.maps[nb.id]
-        collect(def, nb.ox, nb.oy)
-      end
-    end
-  else
-    for _, e in ipairs(session:visibleWarps()) do out[#out + 1] = e end
-  end
-  return out
+  return Overlay._visibleWarps(session, game)
 end
+
+local WARP_STYLE = {
+  key = "warp",
+  selectedField = "selectedWarp",
+  fillColor = { 0.2, 0.45, 1, 0.85 },
+  outlineColor = { 1, 1, 1, 0.95 },
+  selectedColor = { 1, 0.9, 0.3, 0.95 },
+  labelField = "label",
+}
+
+Overlay._visibleWarps = makeVisibleGetter("warps", "visibleWarps", "warp")
 
 -- Draws every warp on every map laid out around the one being rendered as a
 -- blue circle (walk-grid cell centers, projected at each map's world offset),
@@ -273,34 +333,47 @@ end
 -- selection; the ring follows a warp across a border because the offsets come
 -- from the runtime frame, not the session's stale anchor.
 local function drawWarps(session, game)
-  local t = Coords.transform(game)
-  if not t then return end
-  local r = 6 * t.sx
-  for _, e in ipairs(Overlay.visibleWarps(session, game)) do
-    local w = e.warp
-    local x, y = Coords.toScreen(t, e.ox + w.x * 16, e.oy + w.y * 16)
-    if x then
-      local cx, cy = x + 8 * t.sx, y + 8 * t.sy
-      local selected = w == session.selectedWarp
-      love.graphics.setColor(0.2, 0.45, 1, 0.85)
-      love.graphics.circle("fill", cx, cy, r)
-      love.graphics.setColor(1, 1, 1, 0.95)
-      love.graphics.setLineWidth(1)
-      love.graphics.circle("line", cx, cy, r)
-      if selected then
-        love.graphics.setColor(1, 0.9, 0.3, 0.95)
-        love.graphics.setLineWidth(2)
-        love.graphics.circle("line", cx, cy, r + 3 * t.sx)
-      end
-      if w.label and w.label ~= "" then
-        love.graphics.setColor(1, 1, 1, 0.9)
-        Text.label(session.font, w.label, cx + r + 2, cy - r - 8, 1, {
-          bg = { 0.1, 0.1, 0.15, 0.75 }, padX = 2, padY = 1,
-        })
-      end
-    end
-  end
-  love.graphics.setColor(1, 1, 1, 1)
+  drawEntityMarkers(session, game, Overlay._visibleWarps, WARP_STYLE)
+end
+
+-- Objects: green squares (same runtime-frame collection, different colour).
+Overlay._visibleObjects = makeVisibleGetter("objects", "visibleObjects", "object")
+
+local OBJECT_STYLE = {
+  key = "object",
+  selectedField = "selectedObject",
+  fillColor = { 0.2, 0.9, 0.3, 0.7 },
+  outlineColor = { 1, 1, 1, 0.95 },
+  selectedColor = { 1, 0.9, 0.3, 0.95 },
+  labelField = "label",
+}
+
+function Overlay.visibleObjects(session, game)
+  return Overlay._visibleObjects(session, game)
+end
+
+local function drawObjects(session, game)
+  drawEntityMarkers(session, game, Overlay._visibleObjects, OBJECT_STYLE)
+end
+
+-- Signs: orange circles (same runtime-frame collection, different colour).
+Overlay._visibleSigns = makeVisibleGetter("signs", "visibleSigns", "sign")
+
+local SIGN_STYLE = {
+  key = "sign",
+  selectedField = "selectedSign",
+  fillColor = { 1, 0.55, 0.2, 0.85 },
+  outlineColor = { 1, 1, 1, 0.95 },
+  selectedColor = { 1, 0.9, 0.3, 0.95 },
+  labelField = "label",
+}
+
+function Overlay.visibleSigns(session, game)
+  return Overlay._visibleSigns(session, game)
+end
+
+local function drawSigns(session, game)
+  drawEntityMarkers(session, game, Overlay._visibleSigns, SIGN_STYLE)
 end
 
 -- Ghost indicator while dragging a warp or object to a new cell (RMB drag).
@@ -384,6 +457,8 @@ function Overlay.draw(session, game, viewport)
       drawBlueprintPreview(session, game)
       drawSelection(session, game)
       drawWarps(session, game)
+      drawObjects(session, game)
+      drawSigns(session, game)
       drawEntityDrag(session, game)
       drawDestPick(session, game)
     end

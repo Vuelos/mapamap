@@ -65,6 +65,14 @@ function Details.build(session, target)
     add("destWarp", "Warp #", tostring(w.destWarp or 0), "number")
     add("label", "Label", w.label or "", "text")
     add("delete", "DELETE", "", "action")
+  elseif target and target.sign then
+    local s = target.sign
+    add("type", "Type", "SIGN", "readonly")
+    add("label", "Label", (s.label ~= nil and s.label ~= "") and s.label or "New Sign", "text")
+    add("text", "Text", s.text or "", "text")
+    add("pos", "Pos", (s.x ~= nil and s.y ~= nil) and (s.x .. "," .. s.y) or "-",
+      "readonly")
+    add("delete", "DELETE", "", "action")
   elseif target and target.object then
     local o = target.object
     add("type", "Type", (o.object_type or "OBJECT"):upper(), "readonly")
@@ -106,6 +114,11 @@ function Details.title(state)
     local n = (o.label ~= nil and o.label ~= "") and o.label
       or o.sprite or o.item or "OBJECT"
     return (o.object_type or "OBJECT"):upper() .. " " .. tostring(n)
+  end
+  if t and t.sign then
+    local s = t.sign
+    local n = (s.label ~= nil and s.label ~= "") and s.label or "New Sign"
+    return "SIGN " .. tostring(n)
   end
   if t and t.map then
     return "MAP " .. tostring(t.mapId or "")
@@ -151,6 +164,17 @@ local function applyToObject(session, d, key, value)
   return false
 end
 
+local function applyToSign(session, d, key, value)
+  if not (d and d.sign) then return false end
+  if key == "label" then
+    return session:setSignLabel(d.sign, value)
+  elseif key == "text" then
+    d.sign.text = value
+    return true
+  end
+  return false
+end
+
 local function applyToMap(session, d, key, value)
   if not (d and d.map) then return false end
   if key == "name" then
@@ -167,6 +191,7 @@ function Details.commit(session, d, fieldIdx, value)
   local ok
   if d.warp then ok = applyToWarp(session, d, f.key, value)
   elseif d.object then ok = applyToObject(session, d, f.key, value)
+  elseif d.sign then ok = applyToSign(session, d, f.key, value)
   elseif d.map then ok = applyToMap(session, d, f.key, value)
   else ok = applyToItem(d, f.key, value) end
   if ok then f.value = value end
@@ -208,6 +233,9 @@ function Details.delete(ui, session, d)
     if session.selectedWarp == d.warp then session.selectedWarp = nil end
   elseif d.object then
     session:removeObject(d.object)
+  elseif d.sign then
+    session:removeSign(d.sign)
+    if session.selectedSign == d.sign then session.selectedSign = nil end
   elseif d.item then
     for i = #(ui.inventory.items or {}), 1, -1 do
       if ui.inventory.items[i] == d.item then
@@ -227,6 +255,7 @@ function Details.open(ui, session, target)
     target = target,
     warp = target.warp,
     object = target.object,
+    sign = target.sign,
     item = target.item,
     map = target.map,
     mapId = target.mapId,
@@ -251,6 +280,9 @@ function Details.openForItem(ui, session, item)
   elseif item.kind == "object" and item.obj then
     session.selectedObject = item.obj
     Details.open(ui, session, { object = item.obj })
+  elseif item.kind == "sign" and item.sign then
+    session.selectedSign = item.sign
+    Details.open(ui, session, { sign = item.sign })
   else
     Details.open(ui, session, { item = item })
   end

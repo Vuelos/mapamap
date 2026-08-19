@@ -21,11 +21,11 @@ local Tools = {}
 Tools.brush = {
   painting = false,
   erasing = false,
-  draggingEntity = nil,   -- { kind = "warp"|"object", entity = ..., ox, oy } during RMB drag
+  draggingEntity = nil,   -- { kind = "warp"|"object"|"sign", entity = ..., ox, oy } during RMB drag
   paintingMap = nil,      -- mapId painted on this drag (blocks only)
   paintVoidCells = nil,   -- void cells buffered this drag, committed as one map on release
   pendingMapClick = nil,  -- RMB press over a map body, pending click-vs-drag
-  pendingEntityClick = nil, -- RMB press over a warp/object, deferred click-vs-drag
+  pendingEntityClick = nil, -- RMB press over a warp/object/sign, deferred click-vs-drag
   lastBlockX = nil,       -- last painted block coord (re-paint dedupe)
   lastBlockY = nil,
   lastCellX = nil,
@@ -89,7 +89,7 @@ function Tools.armErase()
   b.lastCellX, b.lastCellY = nil, nil
 end
 
--- RMB press over a warp/object: defer the click-vs-drag decision until the
+-- RMB press over a warp/object/sign: defer the click-vs-drag decision until the
 -- pointer either stops (Details click) or moves past the threshold (drag).
 function Tools.deferEntityClick(kind, entity, mx, my)
   local b = Tools.brush

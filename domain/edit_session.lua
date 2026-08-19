@@ -11,6 +11,7 @@ local EditorNeighbors = require("mods.mapamap.domain.editor_neighbors")
 local Warps = require("mods.mapamap.domain.warps")
 local Encounters = require("mods.mapamap.domain.encounters")
 local Objects = require("mods.mapamap.domain.objects")
+local Signs = require("mods.mapamap.domain.signs")
 local MapGrid = require("mods.mapamap.domain.map_grid")
 local Graft = require("mods.mapamap.engine.graft")
 local Gen = require("mods.mapamap.engine.gen")
@@ -24,6 +25,7 @@ mixin(EditSession, EditorNeighbors)
 mixin(EditSession, Warps)
 mixin(EditSession, Encounters)
 mixin(EditSession, Objects)
+mixin(EditSession, Signs)
 
 -- Resolves the UI font the overlay draws labels with.  Prefers the mod's
 -- ui.Font (set by map_editor or another mod), falls back to the active LOVE

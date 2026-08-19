@@ -37,7 +37,6 @@ local Details = require("mods.mapamap.components.details")
 local EncEditor = require("mods.mapamap.components.encounter_editor")
 local Blueprints = require("mods.mapamap.domain.blueprints")
 local Paint = require("mods.mapamap.domain.paint")
-local Objects = require("mods.mapamap.domain.objects")
 local State = require("mods.mapamap.storage.config")
 
 local Input = {}
@@ -367,7 +366,8 @@ function Input.mousepressed(session, game, mx, my, button)
       -- Hovered object/warp: select it and open its Details panel.
       obj = session:objectAt(tx, ty)
       if not obj then warp = session:warpAt(tx, ty) end
-      if not (obj or warp) then
+      if not obj and not warp then sign = session:signAt(tx, ty) end
+      if not (obj or warp or sign) then
         mapId, mapDef = Neighbors.mapAt(session.def, session.neighbors, tx, ty)
       end
     end
@@ -379,6 +379,11 @@ function Input.mousepressed(session, game, mx, my, button)
     if warp then
       session.selectedWarp = warp
       EditorTools.deferEntityClick("warp", warp, mx, my)
+      return true
+    end
+    if sign then
+      session.selectedSign = sign
+      EditorTools.deferEntityClick("sign", sign, mx, my)
       return true
     end
     -- Right-click on a map body opens its Details (rename) on release.  A drag
@@ -449,6 +454,8 @@ function Input.mousereleased(session, mx, my, button)
           session:moveWarp(ent.entity, tx, ty)
         elseif ent.kind == "object" then
           session:moveObject(ent.entity, tx, ty)
+        elseif ent.kind == "sign" then
+          session:moveSign(ent.entity, tx, ty)
         end
       end
       return true
@@ -460,6 +467,8 @@ function Input.mousereleased(session, mx, my, button)
         Input.openDetails(session, { warp = pc.entity })
       elseif pc.kind == "object" then
         Input.openDetails(session, { object = pc.entity })
+      elseif pc.kind == "sign" then
+        Input.openDetails(session, { sign = pc.entity })
       end
       return true
     end
@@ -648,6 +657,25 @@ function Input.keypressed(session, key)
       return true
     end
   end
+  return false
+end
+
+-- Returns true if the mouse is over a object, warp or sign
+function Input.mouseHoveringSingleCellItem(session)
+  local t = Coords.transform(session.game)
+  local mx, my = love.mouse.getPosition()
+  local obj, warp, sign
+  if t then
+    local tx, ty = Coords.toWorldCell(t, mx, my)
+    session.cursorBx, session.cursorBy = tx, ty
+    -- Hovered object/warp: select it and open its Details panel.
+    obj = session:objectAt(tx, ty)
+    if not obj then 
+      warp = session:warpAt(tx, ty) 
+      if not warp then sign = session:signAt(tx, ty) end
+    end
+  end
+  if obj or warp or sign then return true end
   return false
 end
 
