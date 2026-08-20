@@ -271,62 +271,37 @@ end
 -- Replays persisted map patches, new-map defs, and extra connections into the
 -- loaded save (both the Data registry and, on Gen 2, the World's own maps) so
 -- edits survive a reload.  Runs on the save.loaded event.
+-- The data authority resolves off mod.game exactly like a session does
+-- (Manager.resolveData): on Gen 2 that is the World holding maps/tilesets at
+-- game.world; src.core.Data is the Gen 1 registry and Game.state is never
+-- assigned by any game -- both were silent wrong targets here.
 function Manager.replayPatches(mod)
+  local game = mod and mod.game
+  local data = Manager.resolveData(game)
+  if not (data and data.maps) then
+    local Data = require("src.core.Data")
+    if Data and Data.maps then data = Data end
+  end
+  if not (data and data.maps) then return end
   local patches = mod.save:get("mapamap_patches", {})
   if next(patches) then
-    local Data = require("src.core.Data")
-    Save.applyPatchesToData(patches, Data)
-    -- Gen 2: maps live on the World, not on Data.  Apply the same patches
-    -- there so the overworld draws edited blocks immediately.
-    if Gen.isGen2() then
-      local ok, Game = pcall(require, "src.core.Game")
-      if ok and Game and Game.state then
-        local world = Game.state.world or Game.state.overworld
-        if world and world.maps then
-          Save.applyPatchesToData(patches, { maps = world.maps })
-        end
-      end
-    end
+    Save.applyPatchesToData(patches, data)
   end
   -- Replay whole new-map defs.
   local newMaps = mod.save:get("mapamap_new_maps", {})
   if next(newMaps) then
-    local Data = require("src.core.Data")
     for id, def in pairs(newMaps) do
-      if not Data.maps[id] then Data.maps[id] = def end
-    end
-    -- Gen 2: also inject new maps into the World's map registry.
-    if Gen.isGen2() then
-      local ok, Game = pcall(require, "src.core.Game")
-      if ok and Game and Game.state then
-        local world = Game.state.world or Game.state.overworld
-        if world and world.maps then
-          for id, def in pairs(newMaps) do
-            if not world.maps[id] then world.maps[id] = def end
-          end
-        end
-      end
+      if not data.maps[id] then data.maps[id] = def end
     end
   end
   -- Merge extra connections into primary connections so the engine can use them.
-  local Data = require("src.core.Data")
-  Connections.mergeExtraConnections(mod, Data)
-  -- Gen 2: also merge on the World's map defs.
-  if Gen.isGen2() then
-    local ok, Game = pcall(require, "src.core.Game")
-    if ok and Game and Game.state then
-      local world = Game.state.world or Game.state.overworld
-      if world and world.maps then
-        Connections.mergeExtraConnections(mod, { maps = world.maps })
-      end
-    end
-  end
+  Connections.mergeExtraConnections(mod, data)
   -- Any replayed patch may reference grafted foreign blocks -- grow every
   -- touched tileset's atlas from the live defs before maps rebuild, so a
   -- patched map renders its imports instead of drawing blank cells.
   local Graft = require("mods.mapamap.engine.graft")
-  Graft.materializeAll(Data)
-  Gen.invalidateAll()
+  Graft.materializeAll(data)
+  Gen.invalidateAll(data, game)
 end
 
 return Manager

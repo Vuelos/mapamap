@@ -262,6 +262,7 @@ end
 
 -- Opens the modal Details panel for a warp / object / inventory target.
 function Details.open(ui, session, target)
+  ui.showInventory = true
   ui.details = {
     target = target,
     entity = target.entity,

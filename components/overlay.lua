@@ -25,6 +25,7 @@ local Neighbors = require("mods.mapamap.domain.neighbors")
 local Borders = require("mods.mapamap.components.mapborders")
 local Item = require("mods.mapamap.components.item")
 local Hotbar = require("mods.mapamap.components.hotbar")
+local Toolbar = require("mods.mapamap.components.toolbar")
 local Picker = require("mods.mapamap.components.picker")
 local Inventory = require("mods.mapamap.components.inventory")
 local Text = require("mods.mapamap.components.text")
@@ -69,9 +70,9 @@ local function drawCursor(session, game)
     return
   end
   local x, y, w, h
-  if item and (item.kind == "sprite" or item.kind == "item"
-       or item.kind == "entity"
-       or Input.mouseHoveringSingleCellItem(session)) then
+  if (item and (item.kind == "sprite" or item.kind == "item"
+       or item.kind == "entity"))
+       or Input.mouseHoveringSingleCellItem(session) then
     -- Sprites/entities place on a single 1x1 cell (map-object coords are
     -- walk-grid cells); blocks are 2x2 cells.
     x, y, w, h = Coords.cellRect(t, session.cursorBx, session.cursorBy)
@@ -257,7 +258,8 @@ local function makeVisibleGetter(field, sessionMethod, resultKey)
         if nb and nb.map and nb.map.def then
           collect(nb.map.def, nb.ox, nb.oy)
         elseif nb and nb.id and nb.ox ~= nil then
-          local def = session.data and session.data.maps and session.data.maps[nb.id]
+          local def = session.data and session.data.maps
+          def = def and (def[nb.id] or def[tostring(nb.id)])
           collect(def, nb.ox, nb.oy)
         end
       end
@@ -283,13 +285,13 @@ local function drawEntityMarkers(session, game, getVisible, style)
     if x then
       local cx, cy = x + 8 * t.sx, y + 8 * t.sy
       local selected = entity == session.selectedItem
-      love.graphics.setColor(style.fillColor)
+      love.graphics.setColor(unpack(style.fillColor))
       love.graphics.circle("fill", cx, cy, r)
-      love.graphics.setColor(style.outlineColor)
+      love.graphics.setColor(unpack(style.outlineColor))
       love.graphics.setLineWidth(1)
       love.graphics.circle("line", cx, cy, r)
       if selected then
-        love.graphics.setColor(style.selectedColor)
+        love.graphics.setColor(unpack(style.selectedColor))
         love.graphics.setLineWidth(2)
         love.graphics.circle("line", cx, cy, r + 3 * t.sx)
       end
@@ -458,9 +460,11 @@ function Overlay.draw(session, game, viewport)
       drawCursor(session, game)
       drawBlueprintPreview(session, game)
       drawSelection(session, game)
-      drawWarps(session, game)
-      drawObjects(session, game)
-      drawSigns(session, game)
+      if Input.showEntityOverlays then
+        drawWarps(session, game)
+        drawObjects(session, game)
+        drawSigns(session, game)
+      end
       drawEntityDrag(session, game)
       drawDestPick(session, game)
     end
@@ -470,6 +474,7 @@ function Overlay.draw(session, game, viewport)
       Inventory.draw(session, Input.inventory, vw, vh, session.font, Input.selectedItem())
     end
     Hotbar.draw(session, vw, vh, Input.hotbar, Input.selected, session.font)
+    Toolbar.draw(Input, vw, vh, session.font)
     if Input.showPicker then
       Picker.draw(session, vw, vh, {
         selection = Input.pickerTileset,

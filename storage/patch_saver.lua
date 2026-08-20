@@ -65,11 +65,14 @@ function Save.removePatch(mod, mapId)
 end
 
 -- Applies a patches table (mapId -> patch) to Data.maps entries in place.
--- Returns the number of maps that were patched.
+-- Returns the number of maps that were patched.  Missing data (a caller
+-- holding a registry that has no maps yet) is a 0-apply no-op, never a crash.
 function Save.applyPatchesToData(patches, data)
+  local maps = data and data.maps
+  if not (patches and maps) then return 0 end
   local applied = 0
   for mapId, patch in pairs(patches) do
-    local target = data.maps[mapId]
+    local target = maps[mapId]
     if target then
       for key, value in pairs(patch) do
         target[key] = value

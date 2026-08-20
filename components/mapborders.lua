@@ -56,52 +56,93 @@ local function drawLabelCentered(font, str, cx, cy, vertical, bg)
   love.graphics.pop()
   love.graphics.setColor(1, 1, 1, 1)
 end
+-- Draws one connection as a white marker INSIDE the map, using the actual
+-- overlap between this map's rectangle and the destination map's rectangle.
+local function drawConnection(
+  session, t, dir,
+  worldX, worldY, worldW, worldH,
+  conn, destRect, isExtra
+)
+  if not destRect then return end
 
--- Draws one connection as a white marker INSIDE the map, sized to its block
--- offset and seam span (size), with the destination map's name written across
--- it (vertically on the side edges).  A thin colored border marks primaries
--- (orange) versus editor-only extras (magenta).
-local function drawConnection(session, t, dir, worldX, worldY, worldW, worldH, conn, isExtra)
-  local off = conn.offset or 0
-  local sz = conn.size
-  if not sz then
-    -- Legacy size-less connection: assume it spans the whole side.
-    sz = (dir == "north" or dir == "south")
-         and (worldW / Common.BLOCK_PX) or (worldH / Common.BLOCK_PX)
-  end
   local B = Common.BLOCK_PX
   local d = CONN_DEPTH
-  -- White marker rect, inside the map just off the relevant edge.
+
+  -- Calculate the actual seam overlap using the two laid-out rectangles.
+  -- This is important when the two maps have different dimensions.
   local x0, y0, w, h
-  if dir == "north" then
-    x0, y0, w, h = worldX + off * B, worldY, sz * B, d
-  elseif dir == "south" then
-    x0, y0, w, h = worldX + off * B, worldY + worldH - d, sz * B, d
-  elseif dir == "west" then
-    x0, y0, w, h = worldX, worldY + off * B, d, sz * B
-  else -- east
-    x0, y0, w, h = worldX + worldW - d, worldY + off * B, d, sz * B
+
+  if dir == "north" or dir == "south" then
+    local mapX0 = worldX
+    local mapX1 = worldX + worldW
+    local destX0 = destRect.x * B
+    local destX1 = (destRect.x + destRect.w) * B
+
+    x0 = math.max(mapX0, destX0)
+    w = math.min(mapX1, destX1) - x0
+
+    if w <= 0 then return end
+
+    if dir == "north" then
+      y0 = worldY
+    else
+      y0 = worldY + worldH - d
+    end
+
+    h = d
+  else
+    local mapY0 = worldY
+    local mapY1 = worldY + worldH
+    local destY0 = destRect.y * B
+    local destY1 = (destRect.y + destRect.h) * B
+
+    y0 = math.max(mapY0, destY0)
+    h = math.min(mapY1, destY1) - y0
+
+    if h <= 0 then return end
+
+    if dir == "west" then
+      x0 = worldX
+    else
+      x0 = worldX + worldW - d
+    end
+
+    w = d
   end
+
   local sx0, sy0 = Coords.toScreen(t, x0, y0)
   local sx1, sy1 = Coords.toScreen(t, x0 + w, y0 + h)
   if not sx0 or not sx1 then return end
+
   local rx = math.min(sx0, sx1)
   local ry = math.min(sy0, sy1)
   local rw = math.abs(sx1 - sx0)
   local rh = math.abs(sy1 - sy0)
-  -- White fill = the connection's size/offset footprint.
+
   love.graphics.setColor(1, 1, 1, 0.92)
   love.graphics.rectangle("fill", rx, ry, rw, rh)
-  -- Thin colored border: orange primary, magenta extra.
+
   local col = isExtra and EXTRA or PRIMARY
   love.graphics.setColor(col[1], col[2], col[3], 0.5)
   love.graphics.setLineWidth(1)
   love.graphics.rectangle("line", rx, ry, rw, rh)
-  -- Destination name, vertical on the side edges.
+
   local destDef = session.data.maps[conn.map]
-  local name = (destDef and destDef.name) or tostring(conn.map or "?")
-  drawLabelCentered(session.font, name, rx + rw / 2, ry + rh / 2,
-                    (dir == "west" or dir == "east"), nil)
+                  or session.data.maps[tostring(conn.map)]
+                  or session.data.maps[conn.mapId]
+                  or session.data.maps[tostring(conn.mapId)]
+
+  local name = (destDef and destDef.name)
+            or tostring(conn.map or conn.mapId or "?")
+
+  drawLabelCentered(
+    session.font,
+    name,
+    rx + rw / 2,
+    ry + rh / 2,
+    (dir == "west" or dir == "east"),
+    nil
+  )
 end
 
 -- Draws an outline + name tag for every map in the layout, plus a band on each
@@ -111,10 +152,24 @@ end
 function Borders.draw(session, game)
   if not Input.showMapBorders then return end
   if not session or not session.data or not session.data.maps then return end
+
   local t = Coords.transform(game)
   if not t then return end
-  local layout = MapGrid.layout(session.data.maps, session.mapId, Borders.LAYOUT_HOPS)
+
+  local layout = MapGrid.layout(
+    session.data.maps,
+    session.mapId,
+    Borders.LAYOUT_HOPS
+  )
+
   if not layout then return end
+
+  -- Actual world/layout rectangle for every map.
+  local rectById = {}
+  for _, r in ipairs(layout) do
+    rectById[r.id] = r
+  end
+
   for _, r in ipairs(layout) do
     local bx, by, bw, bh = r.x, r.y, r.w, r.h
     local worldX, worldY = bx * Common.BLOCK_PX, by * Common.BLOCK_PX
@@ -134,19 +189,54 @@ function Borders.draw(session, game)
       love.graphics.rectangle("line", rectX, rectY, rectW, rectH)
 
       -- Connection bands on every side (primary slots + editor-only extras).
-      local def = r.def or session.data.maps[r.id]
+      local def = r.def
+                or session.data.maps[r.id]
+                or session.data.maps[tostring(r.id)]
+
       if def then
         for _, dir in ipairs(Common.DIRS) do
           local all = Connections.connectionsOn(def, dir)
+
           local extraSet = {}
           local ex = def.connectionsExtra and def.connectionsExtra[dir]
-          if ex then for _, c in ipairs(ex) do extraSet[c] = true end end
+
+          if ex then
+            for _, c in ipairs(ex) do
+              extraSet[c] = true
+            end
+          else
+            local primary = def.connections and def.connections[dir]
+
+            if type(primary) == "table"
+              and not (primary.map or primary.mapId) then
+
+              for i = 2, #primary do
+                extraSet[primary[i]] = true
+              end
+            end
+          end
+
           local seen = {}
+
           for _, conn in ipairs(all) do
             if not seen[conn] then
               seen[conn] = true
-              drawConnection(session, t, dir, worldX, worldY, worldW, worldH,
-                             conn, not not extraSet[conn])
+
+              local destId = conn.map or conn.mapId
+              local destRect = rectById[destId]
+
+              drawConnection(
+                session,
+                t,
+                dir,
+                worldX,
+                worldY,
+                worldW,
+                worldH,
+                conn,
+                destRect,
+                not not extraSet[conn]
+              )
             end
           end
         end

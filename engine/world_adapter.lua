@@ -97,6 +97,14 @@ function WorldAdapter.flushLiveRebuild(session)
     local ok, img = pcall(ow.imageFor, ow, session.mapId)
     if ok and img then ow.mapImage = img end
   end
+  -- Warp edits land in def.warps after this World's Map instance built its
+  -- _warpAt lookup once in Map.new; without a rebuild the overworld answers a
+  -- stale warp (a just-moved warp keeps snapping back).  Rebuild from the live
+  -- def, deferred here on the draw frame like every other gen2 bake.
+  if ow.map and ow.map.def then
+    local Map2 = require("src.world.gen2.Map")
+    if Map2 then pcall(Map2.rebuildWarpIndex, ow.map) end
+  end
   -- A new map / new connection needs the full runtime neighbor set re-derived
   -- (rebuildNeighbors re-bakes every strip via imageFor, picking up the fresh
   -- graph node).  Kept on failure so a later frame retries.
@@ -144,7 +152,7 @@ end
 function WorldAdapter.reloadGraftedRenderers(session)
   Graft.invalidateTileset(session.data, session.tileset.id)
   Graft.materialize(session.data, session.tileset.id)
-  Gen.invalidateAtlasCache()
+  Gen.invalidateAtlasCache(session)
   session._thumbBundles = {}
   if Gen.isGen2() then
     local Map2 = require("src.world.gen2.Map")

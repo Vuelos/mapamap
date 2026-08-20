@@ -167,6 +167,26 @@ function Graft.applyMembership(data, target, m)
   end
 end
 
+-- GBC / DMG slot hints for the Gen 2 bake: appended atlas slot -> the source
+-- tile's BG palette slot (tileset.tilePalettes[srcTile + 1], defaulting to 1
+-- like the engine's own sheet fallback).  The GBC map bake recolors per BG
+-- palette slot (World:bakeMapImage), and a grafted row has no entry in the
+-- destination's 96-entry tilePalettes -- without this it would take the slot-1
+-- fallback instead of the source tile's actual slot.
+function Graft.applyBgSlots(data, target, m)
+  target.graftBgSlots = nil
+  for slot, s in pairs(m.srcForSlot) do
+    if slot >= m.base then
+      local srcTs = data and data.tilesets and data.tilesets[s.ts]
+      if srcTs then
+        local ps = srcTs.tilePalettes and srcTs.tilePalettes[s.tile + 1]
+        target.graftBgSlots = target.graftBgSlots or {}
+        target.graftBgSlots[slot] = ps or 1
+      end
+    end
+  end
+end
+
 -- RED++ row palette hints: slot -> { group, srcTs } resolved from the SOURCE
 -- tileset's pack groups (mapId nil so the DESTINATION map's per-map tile
 -- exceptions never leak onto a foreign tile; TILESET_GROUP_EXCEPTIONS on the
@@ -260,6 +280,7 @@ function Graft.materialize(data, tilesetId)
   -- collision + palette hints even when pixels are unreachable)
   Graft.applyMembership(data, target, m)
   Graft.applyRowPalettes(data, target, m)
+  Graft.applyBgSlots(data, target, m)
   -- a stamped atlas change must bust the per-map bake (a stale baked palette
   -- would be drawn against the new rows)
   local ok, TileRenderer = pcall(require, "src.render.TileRenderer")

@@ -53,7 +53,7 @@ function MapGrid.layout(maps, rootId, hops)
     if cur.hop < (hops or MapGrid.DEFAULT_DEPTH) then
       for _, dir in ipairs(DIRS) do
         for _, conn in ipairs(Connections.connectionsOn(cur.def, dir)) do
-          local destDef = maps[conn.map]
+          local destDef = maps[conn.map] or maps[tostring(conn.map)]
           if destDef and not placed[conn.map] then
             placed[conn.map] = true
             local x, y = cur.x, cur.y

@@ -43,6 +43,7 @@ function State.reset(ui)
   ui.inventory.scroll = 1
   ui.showInventory = true
   ui.showMapBorders = false
+  ui.showEntityOverlays = true
   ui._needsGraftRebuild = false
 end
 

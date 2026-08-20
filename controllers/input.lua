@@ -33,6 +33,7 @@ local Neighbors = require("mods.mapamap.domain.neighbors")
 local EditorTools = require("mods.mapamap.controllers.editor_tools")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Picker = require("mods.mapamap.components.picker")
+local Toolbar = require("mods.mapamap.components.toolbar")
 local Inventory = require("mods.mapamap.components.inventory")
 local Details = require("mods.mapamap.components.details")
 local EncEditor = require("mods.mapamap.components.encounter_editor")
@@ -191,6 +192,54 @@ function Input.saveInventory(mod) State.saveInventory(Input, mod) end
 function Input.loadInventory(mod) State.loadInventory(Input, mod) end
 
 -- ---------------------------------------------------------------------------
+-- Toolbar toggle helpers (shared between keyboard and mouse)
+
+local function toggleInventory()
+  if Input.showInventory then
+    Input.showPicker = false
+    Input.details = nil
+    Input.encEditor = nil
+  end
+  Input.showInventory = not Input.showInventory
+end
+
+local function toggleEncounters(session)
+  Input.showPicker = false
+  if Input.encEditor then
+    Input.encEditor = nil
+  else
+    EncEditor.open(Input, session)
+    Input.showInventory = true
+  end
+end
+
+local function togglePicker()
+  Input.showPicker = not Input.showPicker
+  if Input.showPicker then
+    Input.showInventory = true
+  end
+  Input.pickerScroll = 1
+  Input.pickerTilesetScroll = 1
+  Input.pickerDropOpen = false
+end
+
+local function toggleBlueprint()
+  Input.blueprintMode = not Input.blueprintMode
+  Input.selectStart, Input.selectEnd = nil, nil
+  Input._bpMoved = false
+end
+
+-- Mapping from toolbar button index (1..5) to the toggle action.
+local TOOL_TOGGLES = {
+  toggleInventory,
+  toggleEncounters,
+  function() Input.showMapBorders = not Input.showMapBorders end,
+  function() Input.showEntityOverlays = not Input.showEntityOverlays end,
+  togglePicker,
+  toggleBlueprint,
+}
+
+-- ---------------------------------------------------------------------------
 -- Dispatch
 
 -- Handles love.mousepressed while active.  Returns true when consumed.
@@ -325,8 +374,15 @@ function Input.mousepressed(session, game, mx, my, button)
       return true
     end
   end
-  -- Hotbar selection.  An LMB press on a filled slot also arms a drag so the
-  -- item can be swapped onto another slot or dropped into the inventory.
+  -- Toolbar toggle strip at the right of the hotbar.
+  local toolIdx = Toolbar.at(vw, vh, mx, my)
+  if toolIdx then
+    if button == 1 then
+      TOOL_TOGGLES[toolIdx]()
+    end
+    return true
+  end
+  -- Hotbar selection.
   local slot = Hotbar.at(vw, vh, mx, my)
   if slot then
     Input.selected = slot
@@ -621,14 +677,7 @@ function Input.keypressed(session, key)
   if Input.encEditor then return EncEditor.key(Input, session, key) end
   if Input.details then return Input.keyDetails(session, key) end
   if key == "n" then
-    Input.showPicker = false
-    -- Toggle the encounter editor for the current map.
-    if Input.encEditor then
-      Input.encEditor = nil
-      -- EncEditor.close()
-    else
-      EncEditor.open(Input, session)
-    end
+    toggleEncounters(session)
     return true
   elseif key == "c" then
     -- Arm graphical destination-pick for the selected warp: the next world
@@ -638,37 +687,30 @@ function Input.keypressed(session, key)
     end
     return true
   elseif key == "e" then
-    Input.showPicker = not Input.showPicker
-    Input.pickerScroll = 1
-    Input.pickerTilesetScroll = 1
-    Input.pickerDropOpen = false
+    togglePicker()
     return true
   elseif key == "b" then
-    -- Blueprint preview: focus the inventory's Blueprints tab.  The inventory
-    -- is the single blueprint container; B is not a separate book.
+    -- Open the inventory and focus the Blueprints tab (index 3).
     Input.showInventory = not Input.showInventory
     Input.showPicker = false
-    Input.inventory.tab = Input.inventory.tab == 4 and 1 or 4
-    Input.inventory.scroll = 1
+    if Input.showInventory then
+      Input.inventory.tab = 3
+      Input.inventory.scroll = 1
+    end
     return true
   elseif key == "tab" then
-    if Input.showInventory then
-      Input.showPicker = false
-      Input.details = nil
-      Input.encEditor = nil
-    end
-    Input.showInventory = not Input.showInventory
+    toggleInventory()
     return true
   elseif key == "r" then
-    -- Toggle rectangle-select capture mode.
-    Input.blueprintMode = not Input.blueprintMode
-    Input.selectStart, Input.selectEnd = nil, nil
-    Input._bpMoved = false
+    toggleBlueprint()
     return true
   elseif key == "o" then
     Input.showMapBorders = not Input.showMapBorders
     return true
-  elseif key == "p" or key == "q" then
+  elseif key == "p" then
+    Input.showEntityOverlays = not Input.showEntityOverlays
+    return true
+  elseif key == "q" then
     -- Pick the block under the mouse into the selected slot.
     local mx, my = love.mouse.getPosition()
     local vw, vh = love.graphics.getDimensions()

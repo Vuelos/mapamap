@@ -31,15 +31,16 @@ function MapOps.reconcileReciprocalConnections(self, persist)
   local changed = {}
   for dir, conn in pairs(def.connections or {}) do
     local back = BACK[dir]
-    if back and conn and conn.map then
-      local other = data.maps[conn.map]
+    if back and conn and (conn.map or conn.mapId) then
+      local other = data.maps[conn.map] or data.maps[tostring(conn.map)]
+                    or data.maps[conn.mapId] or data.maps[tostring(conn.mapId)]
       if other and other ~= def then
         local r = other.connections and other.connections[back]
-        if r and r.map == self.mapId then
+        if r and (r.map == self.mapId or r.mapId == self.mapId) then
           local want = -(conn.offset or 0)
           if (r.offset or 0) ~= want then
             r.offset = want
-            changed[conn.map] = true
+            changed[conn.map or conn.mapId] = true
           end
         end
       end

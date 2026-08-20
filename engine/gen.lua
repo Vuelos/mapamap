@@ -55,15 +55,21 @@ end
 -- Invalidates a map in the loader/World cache.
 -- Gen 1: MapLoader.invalidate drops the cached Map instance.
 -- Gen 2: World:dropMapImages clears baked canvases for the map.
-function Gen.invalidateMap(data, mapId)
+-- The game instance (session.game) is authoritative; Game.state is a legacy
+-- probe kept for callers that predate threading one through -- nothing in
+-- src/ ever assigns Game.state, so only the game instance resolves on Gen 2.
+function Gen.invalidateMap(data, mapId, game)
   if Gen.isGen2() then
-    local ok, Game = pcall(require, "src.core.Game")
-    if ok and Game and Game.state then
-      local ow = Game.state.overworld or Game.state.world
-      -- pcall: World:dropMapImages bakes canvases; an open-path failure must
-      -- not hard-crash the game.
-      if ow and ow.dropMapImages then pcall(ow.dropMapImages, ow, mapId) end
+    local ow = Gen.overworld(game)
+    if not ow then
+      local ok, Game = pcall(require, "src.core.Game")
+      if ok and Game and Game.state then
+        ow = Game.state.overworld or Game.state.world
+      end
     end
+    -- pcall: World:dropMapImages bakes canvases; an open-path failure must
+    -- not hard-crash the game.
+    if ow and ow.dropMapImages then pcall(ow.dropMapImages, ow, mapId) end
   else
     local ok, MapLoader = pcall(require, "src.world.MapLoader")
     if ok and MapLoader and MapLoader.invalidate then MapLoader.invalidate(mapId) end
@@ -73,46 +79,23 @@ end
 -- Invalidates all cached maps/renderers.
 -- Gen 1: MapLoader.invalidateAll.
 -- Gen 2: drop cached canvases for every known map so they re-bake lazily.
-function Gen.invalidateAll(data)
+function Gen.invalidateAll(data, game)
   if Gen.isGen2() then
-    local ok, Game = pcall(require, "src.core.Game")
-    if ok and Game and Game.state then
-      local ow = Game.state.overworld or Game.state.world
-      if ow and ow.dropMapImages and data and data.maps then
-        for mapId in pairs(data.maps) do
-          pcall(ow.dropMapImages, ow, mapId)
-        end
+    local ow = Gen.overworld(game)
+    if not ow then
+      local ok, Game = pcall(require, "src.core.Game")
+      if ok and Game and Game.state then
+        ow = Game.state.overworld or Game.state.world
+      end
+    end
+    if ow and ow.dropMapImages and data and data.maps then
+      for mapId in pairs(data.maps) do
+        pcall(ow.dropMapImages, ow, mapId)
       end
     end
   else
     local ok, MapLoader = pcall(require, "src.world.MapLoader")
     if ok and MapLoader and MapLoader.invalidateAll then MapLoader.invalidateAll() end
-  end
-end
-
--- Refreshes the overworld's visual display so the player sees edits
--- immediately.  Gen 1: rebuild tile renderer(s).  Gen 2: drop cached canvases
--- so they re-bake lazily on the next draw frame.
-function Gen.refreshOverworld(game)
-  if not game then return end
-  local ow = Gen.overworld(game)
-  if not ow then return end
-  if Gen.isGen2() then
-    if ow.dropMapImages then
-      if ow.map and ow.map.id then pcall(ow.dropMapImages, ow, ow.map.id) end
-      if ow.neighbors then
-        for _, nb in ipairs(ow.neighbors) do
-          if nb and nb.id then pcall(ow.dropMapImages, ow, nb.id) end
-        end
-      end
-    end
-  else
-    if ow.map and ow.map.renderer then ow.map.renderer:rebuild() end
-    if ow.neighbors then
-      for _, nb in ipairs(ow.neighbors) do
-        if nb and nb.map and nb.map.renderer then nb.map.renderer:rebuild() end
-      end
-    end
   end
 end
 
@@ -177,36 +160,42 @@ function Gen.thumbnailBundle(session, tsDef)
   -- World's live GBC palette so thumbnails match the in-game colours.
   if Gen.isGen2() then
     local Assets = require("src.render.Assets")
+    -- A materialized tileset draws from its GROWN atlas (vanilla rows plus the
+    -- appended graft rows); a bundle built from the plain image would be a few
+    -- rows short once a graft has landed, so prefer graftImage when present.
+    local rawAtlas = tsDef.graftImage
     local imgPath = tsDef.image
-    if imgPath then
-      local ok2, rawAtlas = pcall(Assets.image, imgPath)
-      if ok2 and rawAtlas then
-        local tpr = tsDef.tilesPerRow or 16
-        local iw, ih = rawAtlas:getDimensions()
-        local totalTiles = math.floor(iw / 8) * math.floor(ih / 8)
-        -- Build quads from the raw atlas (shared by both the raw and baked paths).
-        local function buildQuads()
-          local quads = {}
-          for t = 0, totalTiles - 1 do
-            local sx = (t % tpr) * 8
-            local sy = math.floor(t / tpr) * 8
-            if sx + 8 <= iw and sy + 8 <= ih then
-              quads[t] = love.graphics.newQuad(sx, sy, 8, 8, iw, ih)
-            end
+    if (not rawAtlas) and imgPath then
+      local ok2, img = pcall(Assets.image, imgPath)
+      if ok2 and img then rawAtlas = img end
+    end
+    if rawAtlas then
+      local tpr = tsDef.tilesPerRow or 16
+      local iw, ih = rawAtlas:getDimensions()
+      local totalTiles = math.floor(iw / 8) * math.floor(ih / 8)
+      -- Build quads from the raw atlas (shared by both the raw and baked paths).
+      local function buildQuads()
+        local quads = {}
+        for t = 0, totalTiles - 1 do
+          local sx = (t % tpr) * 8
+          local sy = math.floor(t / tpr) * 8
+          if sx + 8 <= iw and sy + 8 <= ih then
+            quads[t] = love.graphics.newQuad(sx, sy, 8, 8, iw, ih)
           end
-          return quads
         end
-        -- Try to bake a coloured atlas through GbcPalette.
-        local baked = Gen._bakeGen2Atlas(tsDef, rawAtlas, iw, ih, tpr, totalTiles)
-        if baked then
-          return { image = baked, quads = buildQuads(), aliasMap = nil,
-                   blocks = tsDef.blocks }
-        end
-        -- Last resort: raw grayscale atlas (visible but not coloured).
-        rawAtlas:setFilter("nearest", "nearest")
-        return { image = rawAtlas, quads = buildQuads(), aliasMap = nil,
+        return quads
+      end
+      -- Try to bake a coloured atlas through GbcPalette.
+      local baked = Gen._bakeGen2Atlas(session, tsDef, rawAtlas, iw, ih, tpr,
+        totalTiles)
+      if baked then
+        return { image = baked, quads = buildQuads(), aliasMap = nil,
                  blocks = tsDef.blocks }
       end
+      -- Last resort: raw grayscale atlas (visible but not coloured).
+      rawAtlas:setFilter("nearest", "nearest")
+      return { image = rawAtlas, quads = buildQuads(), aliasMap = nil,
+               blocks = tsDef.blocks }
     end
   end
   return nil
@@ -215,18 +204,19 @@ end
 -- Bakes a palette-coloured version of a tileset atlas using the World's live
 -- GbcPalette data.  Returns a LOVE Image (the coloured atlas) or nil when
 -- palette data is unavailable.
-function Gen._bakeGen2Atlas(tsDef, rawAtlas, iw, ih, tpr, totalTiles)
-  local ok, Game = pcall(require, "src.core.Game")
-  if not (ok and Game and Game.state) then return nil end
-  local ow = Game.state.overworld or Game.state.world
-  if not (ow and ow.palettes) then return nil end
+function Gen._bakeGen2Atlas(session, tsDef, rawAtlas, iw, ih, tpr, totalTiles)
+  -- The backing World lives on the GAME instance (game.world on Gen 2), never
+  -- on the global Game.state -- nothing in src/ assigns Game.state -- so the
+  -- palette sources resolve off the session the caller already has.
+  local ow = session and session.game and Gen.overworld(session.game)
   local tilePalettes = tsDef.tilePalettes
-  if not tilePalettes then return nil end
+  if not (ow and ow.palettes and tilePalettes) then return nil end
   local GbcPalette = require("src.render.GbcPalette")
   if not GbcPalette.available() then return nil end
   local Palettes = require("src.world.gen2.Palettes")
-  local mapDef = ow.map and ow.map.def
-  local bgSet = Palettes.bgSet(ow.palettes, mapDef, ow.daytime)
+  local mapDef = (ow.map and ow.map.def) or session.def
+  local daytime = ow.daytime or Palettes.daytimeFor(mapDef)
+  local bgSet = Palettes.bgSet(ow.palettes, mapDef, daytime)
   if not bgSet then return nil end
 
   local PixelCanvas = require("src.render.PixelCanvas")
@@ -250,7 +240,11 @@ function Gen._bakeGen2Atlas(tsDef, rawAtlas, iw, ih, tpr, totalTiles)
       if colors then
         GbcPalette.with(colors, function()
           for t = 0, totalTiles - 1 do
-            local tileSlot = tilePalettes[t + 1] or 1
+            -- Grafted rows keep their SOURCE slot (Graft.applyBgSlots); the
+            -- 96-entry tilePalettes has no entry for them, so without this
+            -- they would all wash into slot 1.
+            local tileSlot = (tsDef.graftBgSlots and tsDef.graftBgSlots[t])
+              or tilePalettes[t + 1] or 1
             if tileSlot == slot then
               local q = quads[t]
               if q then
@@ -270,9 +264,27 @@ end
 
 -- Flushes the thumbnail cache key so a graft or tileset change is reflected.
 -- Gen 1: TileRenderer.invalidateGbcAtlas.
--- Gen 2: no-op (thumbnails are rebuilt lazily).
-function Gen.invalidateAtlasCache()
-  if Gen.isGen2() then return end
+-- Gen 2: drop the World's tileset atlas cache (and the current map's bake, so
+-- the grown texture is re-read) -- keyed by slot count, so nothing needs to
+-- clear it unless the reason is a materialize we cannot reach; the game
+-- instance backs the World just like the other Gen 2 arms.
+function Gen.invalidateAtlasCache(session)
+  if Gen.isGen2() then
+    local ow = session and session.game and Gen.overworld(session.game)
+    if not ow then
+      local ok, Game = pcall(require, "src.core.Game")
+      if ok and Game and Game.state then
+        ow = Game.state.overworld or Game.state.world
+      end
+    end
+    if ow and ow.atlasCache then
+      for k in pairs(ow.atlasCache) do ow.atlasCache[k] = nil end
+    end
+    if ow and session and session.mapId and ow.dropMapImages then
+      pcall(ow.dropMapImages, ow, session.mapId)
+    end
+    return
+  end
   local ok, TileRenderer = pcall(require, "src.render.TileRenderer")
   if ok and TileRenderer and TileRenderer.invalidateGbcAtlas then
     TileRenderer.invalidateGbcAtlas()

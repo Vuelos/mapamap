@@ -156,7 +156,7 @@ end
 
 -- Reloads the session's map from the live data and rebuilds its renderer.
 function EditSession:reloadMap()
-  Gen.invalidateMap(self.data, self.mapId)
+  Gen.invalidateMap(self.data, self.mapId, self.game)
   self.map = Gen.loadMap(self.data, self.mapId)
   Gen.rebuildRenderer(self.map)
   self:storeOriginal()

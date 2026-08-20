@@ -150,7 +150,6 @@ local function run(mod)
   end
 
   -- On save.loaded, replay any saved map patches so edits survive a reload
-  -- (like map_editor does).
   mod.events:on("save.loaded", function()
     SessionManager.replayPatches(mod)
   end)
