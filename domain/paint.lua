@@ -96,12 +96,35 @@ function Paint.paintAt(ui, brush, session, mx, my)
   session.cursorBx = tx - (tx % 2)
   session.cursorBy = ty - (ty % 2)
   session.selectedBlock = item.id
+  -- Resolve which map the cursor actually edits BEFORE importing: a foreign-
+  -- tileset block painted across a seam must graft into THAT map's tileset and
+  -- def.  Importing into the session's own pair (the old behavior) put the id
+  -- in this map's graftBlocks space and indexed this map's tileset atlas --
+  -- the neighbor's renderer could resolve neither, so the cell drew blank and
+  -- the graft was persisted on the wrong map.  Mirrors paintBlueprint.
+  local Graft = require("mods.mapamap.engine.graft")
+  local tMapId, tDef = Neighbors.mapAt(session.def, session.neighbors,
+    session.cursorBx, session.cursorBy)
+  if not tDef then tMapId, tDef = nil, session.def end
   local srcTileset = item.srcTileset or item.tileset
-  if srcTileset and srcTileset ~= session.tileset.id then
-    local gid = session:importBlock(srcTileset, item.id)
+  if srcTileset and srcTileset ~= tDef.tileset then
+    local gid
+    if tDef == session.def then
+      gid = session:importBlock(srcTileset, item.id)
+    else
+      gid = Graft.importBlock(session.data, tDef.tileset, tDef,
+        srcTileset, item.id)
+    end
     if gid == nil then return false end
     session.selectedBlock = gid
-    if session._needsGraftRebuild then
+    if tDef ~= session.def then
+      -- The DESTINATION tileset grew rows: every renderer already built on it
+      -- holds the pre-growth atlas texture (TileRenderer:rebuild only drops
+      -- the draw window), so remount them or the cell draws blank until the
+      -- player enters the map.  Flags the map dirty for save/bake too.
+      WorldAdapter.reloadTilesetRenderers(session, tDef.tileset)
+      session.neighborDirty[tMapId] = true
+    elseif session._needsGraftRebuild then
       session:reloadGraftedRenderers()
     end
   end

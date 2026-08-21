@@ -157,6 +157,57 @@ function WorldAdapter.refreshObjects(session)
   return true
 end
 
+-- Reloads every renderer built on `tilesetId` after a graft grew its atlas.
+-- Gen 1 TileRenderers capture the atlas IMAGE at construction and :rebuild()
+-- only drops the draw window (src/render/TileRenderer.lua:987), so a grown
+-- atlas stays invisible to live instances -- grafted ids point past the old
+-- texture until each Map is reconstructed.  This remounts the editor session,
+-- the editor neighbor set, and the RUNTIME overworld's current map + strip
+-- instances for every map on that tileset.  Gen 2 re-bakes from defs, so a
+-- deferred live-rebuild flag is enough there.
+function WorldAdapter.reloadTilesetRenderers(session, tilesetId)
+  Graft.invalidateTileset(session.data, tilesetId)
+  Graft.materialize(session.data, tilesetId)
+  Gen.invalidateAtlasCache(session)
+  session._thumbBundles = {}
+  if Gen.isGen2() then
+    session._needsLiveRebuild = true
+    return
+  end
+  local MapLoader = require("src.world.MapLoader")
+  local function remount(mapId, fallback)
+    MapLoader.invalidate(mapId)
+    local m = MapLoader.load(session.data, mapId)
+    if m and m.renderer then m.renderer:rebuild() end
+    return m or fallback
+  end
+  local usesTileset = function(def)
+    return def ~= nil and def.tileset == tilesetId
+  end
+  if usesTileset(session.def) then
+    session.map = remount(session.mapId, session.map)
+  end
+  for nbId, m in pairs(session.neighborMaps or {}) do
+    if usesTileset(session.data.maps[nbId]) then
+      session.neighborMaps[nbId] = remount(nbId, m)
+    end
+  end
+  local ow = session.game and Gen.overworld(session.game)
+  if not ow then return end
+  if ow.map and usesTileset(ow.map.def) then
+    ow.map = remount(ow.map.id, ow.map)
+  end
+  if ow.neighbors then
+    for _, nb in ipairs(ow.neighbors) do
+      local ndef = (nb.id and session.data.maps[nb.id]) or nb.map and nb.map.def
+      if usesTileset(ndef) then
+        local id = nb.id or (nb.map and nb.map.id)
+        if id then nb.map = remount(id, nb.map) end
+      end
+    end
+  end
+end
+
 -- Materializes a graft and rebuilds all renderers using the grown atlas.
 function WorldAdapter.reloadGraftedRenderers(session)
   Graft.invalidateTileset(session.data, session.tileset.id)
