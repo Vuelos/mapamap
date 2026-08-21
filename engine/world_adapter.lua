@@ -99,11 +99,14 @@ function WorldAdapter.flushLiveRebuild(session)
   end
   -- Warp edits land in def.warps after this World's Map instance built its
   -- _warpAt lookup once in Map.new; without a rebuild the overworld answers a
-  -- stale warp (a just-moved warp keeps snapping back).  Rebuild from the live
-  -- def, deferred here on the draw frame like every other gen2 bake.
+  -- stale warp (a just-moved warp keeps snapping back).  refreshFromDef
+  -- re-captures blocks/width/connections too: expansion and patch replay
+  -- REPLACE those tables, and the live instance's stale references made
+  -- collision answer the pre-edit grid.  Deferred here on the draw frame like
+  -- every other gen2 bake.
   if ow.map and ow.map.def then
     local Map2 = require("src.world.gen2.Map")
-    if Map2 then pcall(Map2.rebuildWarpIndex, ow.map) end
+    if Map2 then pcall(Map2.refreshFromDef, ow.map) end
   end
   -- A new map / new connection needs the full runtime neighbor set re-derived
   -- (rebuildNeighbors re-bakes every strip via imageFor, picking up the fresh
@@ -115,9 +118,15 @@ function WorldAdapter.flushLiveRebuild(session)
     return
   end
   -- Update dirty neighbor images in place so their canvases stay current
-  -- without recomputing the full neighbor list.
+  -- without recomputing the full neighbor list.  The World also caches a
+  -- per-neighbor Map instance for seam collision (connectionMaps, built once);
+  -- refresh it so a painted/expanded neighbor walks with the new grid too.
   if ow.imageFor and ow.neighbors then
     for nbId in pairs(session.neighborDirty or {}) do
+      if ow.connectionMaps and ow.connectionMaps[nbId] then
+        local Map2 = require("src.world.gen2.Map")
+        if Map2 then pcall(Map2.refreshFromDef, ow.connectionMaps[nbId]) end
+      end
       if ow.dropMapImages then pcall(ow.dropMapImages, ow, nbId) end
       local ok, img = pcall(ow.imageFor, ow, nbId)
       if ok and img then

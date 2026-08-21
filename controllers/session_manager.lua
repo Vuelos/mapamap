@@ -317,6 +317,21 @@ function Manager.replayPatches(mod)
     if ow and ow.rebuildNeighbors then
       pcall(ow.rebuildNeighbors, ow)
     end
+    -- The World's live Map instances (self.map + the connectionMaps seam-
+    -- collision cache) captured def.blocks / width / connections by reference
+    -- when they were built -- BEFORE save.loaded fired.  Patch replay swapped
+    -- those tables wholesale, so without this re-capture the player walks the
+    -- PRE-edit collision grid until they re-enter each map.  The overlay is
+    -- closed on this event, so no draw-frame flush would ever run either.
+    local Map2 = require("src.world.gen2.Map")
+    if ow and Map2 and Map2.refreshFromDef then
+      if ow.map then pcall(Map2.refreshFromDef, ow.map) end
+      if ow.connectionMaps then
+        for _, m in pairs(ow.connectionMaps) do
+          if m then pcall(Map2.refreshFromDef, m) end
+        end
+      end
+    end
   end
 end
 
