@@ -197,6 +197,11 @@ function Manager.open(mod, game)
   if not okExpand then
     mod.log:warn("mapamap: grid expansion failed on open: %s", tostring(expandErr))
   end
+  -- Gen 2: invalidate cached map images so newly created maps' collision
+  -- and render data are picked up on the next draw frame.
+  if Gen.isGen2() then
+    Gen.invalidateAll(s.data, game)
+  end
   Manager.seedInput(mod, s)
   Manager.session = s
   Manager.active = true
@@ -302,6 +307,17 @@ function Manager.replayPatches(mod)
   local Graft = require("mods.mapamap.engine.graft")
   Graft.materializeAll(data)
   Gen.invalidateAll(data, game)
+  -- Gen 2: the World caches its neighbor strip list in `world.neighbors`; a
+  -- save.loaded replay can add brand-new map defs (and new connections on
+  -- existing ones) that the cached neighbor set does not know about yet.
+  -- Rebuild so the new maps are visible and traversable immediately instead
+  -- of waiting for a zoom or map change.
+  if Gen.isGen2() then
+    local ow = Gen.overworld(game)
+    if ow and ow.rebuildNeighbors then
+      pcall(ow.rebuildNeighbors, ow)
+    end
+  end
 end
 
 return Manager
