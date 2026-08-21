@@ -168,6 +168,12 @@ function Manager.resolveData(game)
     merged.maps = world.maps or merged.maps
     merged.tilesets = world.tilesets or merged.tilesets
   end
+  -- Gen 2 renames: raw game.data carries gen2Encounters (the engine's
+  -- Gen2Compat facade is what exposes it as .encounters, and this reads raw),
+  -- so forward it or the encounter editor finds no source table at all.
+  if not merged.encounters and data then
+    merged.encounters = data.gen2Encounters
+  end
   if not merged.maps then
     local Data = require("src.core.Data")
     if Data and Data.maps then merged = Data end

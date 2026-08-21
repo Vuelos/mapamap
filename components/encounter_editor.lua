@@ -17,18 +17,22 @@ EncEditor.DROP_H = 20
 local PAD = Panel.PAD
 local ROW_H = Panel.ROW_H
 
-local GROUPS = { "grass", "water", "indoor" }
-local GROUP_CAP = { grass = "Grass", water = "Water", indoor = "Indoor" }
+local GROUPS = {"grass", "water", "indoor"}
+
+local GROUP_CAP = {
+  grass = "Grass", water = "Water", indoor = "Indoor",
+  grass_morn = "Grass M", grass_day = "Grass D", grass_nite = "Grass N",
+}
 
 -- Column geometry constants.
 local LV_W = 96
 local LV_PAD = 4
 
 -- Tab definitions for Panel.drawTabs / Panel.tabAt.
-local function tabDefs()
+local function tabDefs(groups)
   local t = {}
-  for _, gk in ipairs(GROUPS) do
-    t[#t + 1] = { label = GROUP_CAP[gk] }
+  for _, gk in ipairs(groups) do
+    t[#t + 1] = { label = GROUP_CAP[gk] or gk }
   end
   return t
 end
@@ -41,9 +45,9 @@ function EncEditor.over(vw, vh, mx, my)
   return Panel.over(EncEditor.rect, vw, vh, mx, my)
 end
 
-function EncEditor.tabAt(vw, vh, mx, my, font)
+function EncEditor.tabAt(vw, vh, mx, my, font, groups)
   local x, y = EncEditor.rect(vw, vh)
-  return Panel.tabAt(tabDefs(), x, Panel.titleBottom(y), font, mx, my)
+  return Panel.tabAt(tabDefs(groups), x, Panel.titleBottom(y), font, mx, my)
 end
 
 -- Row top Y (below tabs) for hit-testing and drawing.
@@ -107,6 +111,20 @@ function EncEditor.dropRect(vw, vh, slotRow, scrollOffset)
   return dx, dropTop, dw, maxDropH, scrollOffset or 0
 end
 
+-- The "+ Add row" button rect: a full-width bar pinned above the hint footer.
+-- Clicking it appends a slot to the active group (creating the table first
+-- when the group has no data yet).
+function EncEditor.addBtnRect(vw, vh)
+  local x, y, w, h = EncEditor.rect(vw, vh)
+  return x + PAD, y + h - PAD - 14 - ROW_H, w - PAD * 2, ROW_H
+end
+
+-- True when (mx,my) is inside the "+ Add row" button.
+function EncEditor.addBtnHit(vw, vh, mx, my)
+  local bx, by, bw, bh = EncEditor.addBtnRect(vw, vh)
+  return mx >= bx and mx < bx + bw and my >= by and my < by + bh
+end
+
 function EncEditor.dropEntryAt(vw, vh, mx, my, slotRow, scrollOffset)
   local dx, dy, dw, dh = EncEditor.dropRect(vw, vh, slotRow, scrollOffset)
   if not dx then return nil end
@@ -160,10 +178,16 @@ end
 
 function EncEditor.open(ui, session)
   session:ensureEncounters()
+  ui.showInventory = true
+  -- The session's group list is generation-aware (domain/encounters.lua):
+  -- Gen 1 grass/water/indoor, Gen 2 grass_morn/grass_day/grass_nite/water.
+  local groups = (session.groups and session:groups())
+    or { "grass", "water", "indoor" }
   ui.encEditor = {
     session = session,
+    groups = groups,
     tab = 1,
-    fields = EncEditor.build(session, GROUPS[1]),
+    fields = EncEditor.build(session, groups[1]),
     index = 1,
     dropdown = nil,
     levelEdit = nil,
@@ -178,7 +202,8 @@ end
 local function rebuild(ui)
   local d = ui.encEditor
   if not d then return end
-  local gk = GROUPS[d.tab or 1]
+  local groups = d.groups
+  local gk = groups[d.tab or 1]
   local idx = math.min(d.index, #d.fields)
   d.fields = EncEditor.build(d.session, gk)
   d.index = math.max(1, math.min(idx, #d.fields))
@@ -219,7 +244,7 @@ function EncEditor.mousepressed(ui, session, mx, my, button)
 
   -- Tab click.
   local font = session and session.font
-  local tabIdx = EncEditor.tabAt(vw, vh, mx, my, font)
+  local tabIdx = EncEditor.tabAt(vw, vh, mx, my, font, d.groups)
   if tabIdx then
     if d.tab ~= tabIdx then
       d.tab = tabIdx
@@ -229,6 +254,15 @@ function EncEditor.mousepressed(ui, session, mx, my, button)
       d.dropdown = nil
       rebuild(ui)
     end
+    return true
+  end
+
+  -- "+ Add row" button: append a slot to the active group (the domain call
+  -- creates the table first when the group has no data yet).
+  if EncEditor.addBtnHit(vw, vh, mx, my) then
+    local gk = (d.groups and d.groups[d.tab or 1]) or "grass"
+    session:addEncounterSlot(gk)
+    rebuild(ui)
     return true
   end
 
@@ -432,7 +466,7 @@ function EncEditor.key(ui, session, key)
     return true
   elseif key == "a" then
     local f = d.fields and d.fields[d.index]
-    local gk = f and f.group or GROUPS[d.tab or 1]
+    local gk = f and f.group or d.groups[d.tab or 1]
     session:addEncounterSlot(gk)
     rebuild(ui)
     return true
@@ -462,7 +496,7 @@ function EncEditor.draw(session, state, vw, vh, font)
   Panel.drawTitle(font, EncEditor.title(state), x, y)
 
   local mx, my = love.mouse.getPosition()
-  Panel.drawTabs(tabDefs(), x, Panel.titleBottom(y), font, state.tab, mx, my)
+  Panel.drawTabs(tabDefs(state.groups), x, Panel.titleBottom(y), font, state.tab, mx, my)
   Panel.resetColor()
 
   local ry0 = rowTopY(vh)
@@ -524,6 +558,23 @@ function EncEditor.draw(session, state, vw, vh, font)
     end
   end
 
+  -- "+ Add row" button (click appends a slot to the active group).
+  do
+    local bx, by, bw, bh = EncEditor.addBtnRect(vw, vh)
+    local hovered = mx >= bx and mx < bx + bw and my >= by and my < by + bh
+    love.graphics.setColor(0.16, 0.16, 0.22, 0.95)
+    love.graphics.rectangle("fill", bx, by, bw, bh)
+    if hovered then
+      love.graphics.setColor(1, 1, 1, 0.95)
+    else
+      love.graphics.setColor(0.5, 0.5, 0.55, 0.5)
+    end
+    love.graphics.rectangle("line", bx, by, bw, bh)
+    Text.label(font, "+ Add row", bx + 4, by + 3, 2,
+      { bg = Panel.CHIP_TITLE, padX = 2, padY = 1 })
+    Panel.resetColor()
+  end
+
   -- Full-height species dropdown.
   if state.dropdown then
     local di = state.index
@@ -560,7 +611,7 @@ function EncEditor.draw(session, state, vw, vh, font)
   elseif state.levelEdit then
     hint = "Type digits (1-100)  Enter: ok  Esc: cancel"
   else
-    hint = "Left/Right: group  Up/Down: row  Enter: edit  A: add  X: del  N/Esc: close"
+    hint = "Left/Right: group  Up/Down: row  Enter: edit  X: del  + Add row: new slot  N/Esc: close"
   end
   Panel.drawHint(font, hint, x, y, w, h)
   Panel.resetColor()
