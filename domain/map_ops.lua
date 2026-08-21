@@ -5,6 +5,7 @@ local Fill = require("mods.mapamap.domain.fill")
 local Common = require("mods.mapamap.common")
 local Snapshot = require("mods.mapamap.domain.snapshot")
 local Gen = require("mods.mapamap.engine.gen")
+local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 local CELL_PX = Common.CELL_PX
 local BLOCK_PX = Common.BLOCK_PX
 
@@ -640,7 +641,10 @@ function MapOps.storeOriginal(self)
   self.expandShiftL = 0
   self.expandShiftT = 0
   self.paletteList = {}
-  for i = 1, #self.tileset.blocks do self.paletteList[i] = i - 1 end
+  -- Gen 2: stop before the trailing $00 filler metatile slots so hotbar
+  -- seeds never offer dead block ids (Common.effectiveBlockCount).
+  local nativeCount = Common.effectiveBlockCount(self.tileset)
+  for i = 1, nativeCount do self.paletteList[i] = i - 1 end
   self.spriteList = {}
   local sprites = self.data and self.data.sprites or {}
   local keys = {}

@@ -179,7 +179,10 @@ function EditorNeighbors.switchToMap(self, nb)
   self.originalRecipConnections = self:snapshotRecipConnections()
   self.originalEncounters = Common.deepCopy(self._sessionEncounters[nb.id])
   self.paletteList = {}
-  for i = 1, #self.tileset.blocks do self.paletteList[i] = i - 1 end
+  -- Gen 2: stop before the trailing $00 filler metatile slots
+  -- (Common.effectiveBlockCount), matching storeOriginal's list.
+  local nativeCount = Common.effectiveBlockCount(self.tileset)
+  for i = 1, nativeCount do self.paletteList[i] = i - 1 end
   Gen.rebuildRenderer(self.map)
 
   self.mapChanged = pendingEdits
