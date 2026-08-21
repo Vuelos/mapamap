@@ -357,7 +357,23 @@ local function drawObjects(session, game)
 end
 
 -- Signs: orange circles (same runtime-frame collection, different colour).
-Overlay._visibleSigns = makeVisibleGetter("signs", "visibleSigns", "sign")
+-- Gen 2 defs carry no `signs` array: a sign is a readable BACKGROUND EVENT
+-- (bgEvents kind 0 READ, 1-4 directional, 5/6 conditional; 7 ITEM and 8 COPY
+-- are not signs -- World:bgEventAt is the engine's own dispatch).  Project
+-- those so markers (and the hover/entity tools) see them on Gold.
+local function signsOf(def)
+  local list = def and def.signs
+  if list then return list end
+  local bg = def and def.bgEvents
+  if not bg then return nil end
+  local out = {}
+  for _, ev in ipairs(bg) do
+    if (ev.kind or 0) <= 6 then out[#out + 1] = ev end
+  end
+  return out
+end
+
+Overlay._visibleSigns = makeVisibleGetter("signs", "visibleSigns", "sign", signsOf)
 
 local SIGN_STYLE = {
   key = "sign",
