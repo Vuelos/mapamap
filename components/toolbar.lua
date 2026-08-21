@@ -19,11 +19,13 @@ Toolbar.PAD = Hotbar.PAD             -- 10 px from the hotbar border
 -- from the Input controller table.
 Toolbar.BUTTONS = {
   { key = "I", id = "inventory",  on = function(ui) return ui.showInventory end },
-  { key = "N", id = "encounters", on = function(ui) return ui.encEditor ~= nil end },
+  { key = "N", id = "encounters", on = function(ui) return ui.encEditor end },
   { key = "O", id = "borders",    on = function(ui) return ui.showMapBorders end },
   { key = "P", id = "entities",   on = function(ui) return ui.showEntityOverlays end },
   { key = "E", id = "tileset",    on = function(ui) return ui.showPicker end },
   { key = "R", id = "blueprint",  on = function(ui) return ui.blueprintMode end },
+  { key = "M", id = "brushmaker", on = function(ui) return ui.showBrushEditor end },
+  { key = "F", id = "factory",    on = function(ui) return ui.showEntitySelector end },
 }
 
 -- Colours: yellow when the button's surface is open, dark otherwise.

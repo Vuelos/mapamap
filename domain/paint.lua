@@ -8,6 +8,7 @@
 local Common = require("mods.mapamap.common")
 local Coords = require("mods.mapamap.engine.coords")
 local Neighbors = require("mods.mapamap.domain.neighbors")
+local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Details = require("mods.mapamap.components.details")
 local Blueprints = require("mods.mapamap.domain.blueprints")
@@ -89,6 +90,16 @@ function Paint.paintAt(ui, brush, session, mx, my)
   -- Blueprints stamp a block grid at the cursor block.
   if item.kind == "blueprint" then
     return Blueprints.paint(ui, session, item.id, mx, my)
+  end
+
+  -- Terrain brushes stamp a join-aware tile at the cursor block and re-blend
+  -- the surrounding brush tiles (see MapOps.paintBrush).
+  if item.kind == "brush" then
+    local bx = math.floor(tx / 2)
+    local by = math.floor(ty / 2)
+    session.cursorBx = bx * 2
+    session.cursorBy = by * 2
+    return session:paintBrush(item, bx, by)
   end
 
   -- Blocks paint with the shared map_ops brush.  Cursor is snapped to whole

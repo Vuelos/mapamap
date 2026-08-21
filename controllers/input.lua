@@ -30,6 +30,7 @@
 
 local Coords = require("mods.mapamap.engine.coords")
 local Neighbors = require("mods.mapamap.domain.neighbors")
+local Common = require("mods.mapamap.common")
 local EditorTools = require("mods.mapamap.controllers.editor_tools")
 local Hotbar = require("mods.mapamap.components.hotbar")
 local Picker = require("mods.mapamap.components.picker")
@@ -37,6 +38,9 @@ local Toolbar = require("mods.mapamap.components.toolbar")
 local Inventory = require("mods.mapamap.components.inventory")
 local Details = require("mods.mapamap.components.details")
 local EncEditor = require("mods.mapamap.components.encounter_editor")
+local BrushEditor = require("mods.mapamap.components.brush_editor")
+local EntitySelector = require("mods.mapamap.components.entity_selector")
+local Brushes = require("mods.mapamap.domain.brushes")
 local Blueprints = require("mods.mapamap.domain.blueprints")
 local Paint = require("mods.mapamap.domain.paint")
 local State = require("mods.mapamap.storage.config")
@@ -74,6 +78,15 @@ Input.pickerTileset = nil
 -- Dragging a picker item onto a hotbar slot.
 Input.dragItem = nil
 
+-- Brush Maker: the draft brush being assembled in the panel.  Slots are
+-- filled by dragging in; SAVE stores it as an inventory brush item.  When the
+-- draft was loaded from a saved brush (RMB on a Brushes-tab cell),
+-- brushSource links back to that item: SAVE then updates it in place and
+-- DELETE removes it from the collection.
+Input.showBrushEditor = false
+Input.brushDraft = Brushes.new("Brush")
+Input.brushSource = nil
+
 -- Blueprint support: a rectangle-select capture mode.  Captured blueprints are
 -- stored whole as items in the inventory's Blueprints tab (the inventory is
 -- the single blueprint container; there is no separate book).
@@ -98,6 +111,19 @@ Input.encEditor = nil         -- { session, fields, index, editing } or nil
 local function finishDragDrop(mx, my)
   if not Input.dragItem then return false end
   local vw, vh = love.graphics.getDimensions()
+  -- Dropping on a Brush Maker slot stores a copy of the tile there (only
+  -- block items can be brush tiles; anything else is just consumed).
+  if Input.showBrushEditor then
+    local key = BrushEditor.slotKeyAt(vw, vh, mx, my)
+    if key then
+      if Input.dragItem.kind == "block" then
+        Brushes.setSlot(Input.brushDraft, key, Common.deepCopy(Input.dragItem))
+      end
+      Input.dragItem = nil
+      Input.dragFromSlot = nil
+      return true
+    end
+  end
   local slot = Hotbar.at(vw, vh, mx, my)
   local fromSlot = Input.dragFromSlot
   if slot then
@@ -191,12 +217,77 @@ function Input.saveHotbar(mod) State.saveHotbar(Input, mod) end
 function Input.saveInventory(mod) State.saveInventory(Input, mod) end
 function Input.loadInventory(mod) State.loadInventory(Input, mod) end
 
+-- Stores the Brush Maker draft as a brush item in the inventory (Brushes
+-- tab).  Requires at least the center tile; everything else is optional.
+-- A draft loaded from a saved brush updates that brush in place instead of
+-- appending a duplicate.
+function Input.saveBrushDraft()
+  local draft = Input.brushDraft
+  if not Brushes.isComplete(draft) then return false end
+  if Input.brushSource then
+    for i, it in ipairs(Input.inventory.items) do
+      if it == Input.brushSource then
+        Input.inventory.items[i] = Brushes.clone(draft)
+        Input.brushSource = nil
+        return true
+      end
+    end
+    -- The source vanished from the collection: fall through to append.
+    Input.brushSource = nil
+  end
+  local brush = Brushes.clone(draft)
+  brush.name = "Brush " .. tostring(os.time() % 100000)
+  Input.addInventory(brush)
+  return true
+end
+
+-- Empties every draft slot (optional positions fall back again) and detaches
+-- the draft from any saved brush it was loaded from.
+function Input.clearBrushDraft()
+  Input.brushDraft = Brushes.new(Input.brushDraft and Input.brushDraft.name or nil)
+  Input.brushSource = nil
+end
+
+-- Removes the saved brush the draft was loaded from (DELETE button).  The
+-- draft itself keeps its slots so it can be tweaked and re-saved; returns
+-- false when there is nothing linked (or the item is already gone).
+function Input.deleteBrushSource()
+  local src = Input.brushSource
+  if not src then return false end
+  for i, it in ipairs(Input.inventory.items) do
+    if it == src then
+      table.remove(Input.inventory.items, i)
+      Input.brushSource = nil
+      return true
+    end
+  end
+  Input.brushSource = nil
+  return false
+end
+
+-- Loads an existing brush into the maker for editing (RMB on a Brushes-tab
+-- cell).  The draft is a copy, so SAVE stores the result as a new entry and
+-- the original stays untouched until then.
+function Input.editBrush(item)
+  if not item or item.kind ~= "brush" then return false end
+  local copy = Common.deepCopy(item)
+  copy.kind = "brush"
+  Input.brushDraft = copy
+  Input.brushSource = item
+  Input.showBrushEditor = true
+  Input.showInventory = true
+  Input.inventory.tab = Inventory.tabFor(item)
+  Input.inventory.scroll = 1
+  return true
+end
+
 -- ---------------------------------------------------------------------------
 -- Toolbar toggle helpers (shared between keyboard and mouse)
 
 local function toggleInventory()
   if Input.showInventory then
     Input.showPicker = false
+    Input.showBrushEditor = false
     Input.details = nil
     Input.encEditor = nil
   end
@@ -229,7 +320,16 @@ local function toggleBlueprint()
   Input._bpMoved = false
 end
 
--- Mapping from toolbar button index (1..5) to the toggle action.
+local function toggleBrushMaker()
+  Input.showBrushEditor = not Input.showBrushEditor
+  if Input.showBrushEditor then
+    -- Tiles are dragged in from the inventory/picker, so make sure a source
+    -- panel is open alongside the maker.
+    Input.showInventory = true
+  end
+end
+
+-- Mapping from toolbar button index to the toggle action.
 local TOOL_TOGGLES = {
   toggleInventory,
   toggleEncounters,
@@ -237,6 +337,8 @@ local TOOL_TOGGLES = {
   function() Input.showEntityOverlays = not Input.showEntityOverlays end,
   togglePicker,
   toggleBlueprint,
+  toggleBrushMaker,
+  toggleFactory,
 }
 
 -- ---------------------------------------------------------------------------
@@ -349,7 +451,12 @@ function Input.mousepressed(session, game, mx, my, button)
       if idx then
         local item = Inventory.list(Input)[idx]
         if item then
-          Details.openForItem(Input, session, item)
+          -- Brushes edit in the Brush Maker; everything else opens Details.
+          if item.kind == "brush" then
+            Input.editBrush(item)
+          else
+            Details.openForItem(Input, session, item)
+          end
         end
       end
       return true
@@ -513,6 +620,18 @@ function Input.mousereleased(session, mx, my, button)
   end
   if button == 1 and Input.dragItem then
     local vw, vh = love.graphics.getDimensions()
+    -- Brush Maker drop: a block tile dropped on a slot joins the draft.
+    if Input.showBrushEditor then
+      local key = BrushEditor.slotKeyAt(vw, vh, mx, my)
+      if key then
+        if Input.dragItem.kind == "block" then
+          Brushes.setSlot(Input.brushDraft, key, Common.deepCopy(Input.dragItem))
+        end
+        Input.dragItem = nil
+        Input.dragFromSlot = nil
+        return true
+      end
+    end
     local slot = Hotbar.at(vw, vh, mx, my)
     local fromSlot = Input.dragFromSlot
     if slot then
@@ -631,6 +750,11 @@ function Input.wheelmoved(session, dy)
   if not session then return false end
   local vw, vh = love.graphics.getDimensions()
   local mx, my = love.mouse.getPosition()
+  -- The Brush Maker has nothing to scroll; consume the wheel so it never
+  -- cycles the hotbar underneath.
+  if Input.showBrushEditor and BrushEditor.over(vw, vh, mx, my) then
+    return true
+  end
   if Input.showInventory and Inventory.over(vw, vh, mx, my) then
     local list = Inventory.list(Input)
     local per = Inventory.perPage(vw, vh)
@@ -698,6 +822,9 @@ function Input.keypressed(session, key)
       Input.inventory.scroll = 1
     end
     return true
+  elseif key == "m" then
+    toggleBrushMaker()
+    return true
   elseif key == "tab" then
     toggleInventory()
     return true
@@ -744,15 +871,38 @@ end
 function Input.mouseHoveringSingleCellItem(session)
   local t = Coords.transform(session.game)
   local mx, my = love.mouse.getPosition()
-  local entity
-  if t then
-    local tx, ty = Coords.toWorldCell(t, mx, my)
-    session.cursorBx, session.cursorBy = tx, ty
-    entity = session:objectAt(tx, ty)
+  if not t then return false end
+  local tx, ty = Coords.toWorldCell(t, mx, my)
+  session.cursorBx, session.cursorBy = tx, ty
+  -- Resolve the laid-out map that owns this cell first: the session's *At
+  -- lookups scan only the edited map's def, so hovering an entity on any
+  -- other visible map answered nil and the cursor stayed block-snapped.
+  local mapId, def, ox, oy = Neighbors.mapAt(session.def, session.neighbors,
+    tx, ty)
+  if not def then return false end
+  if not mapId then
+    -- Current map: keep the session's own (index-backed) lookups.
+    local entity = session:objectAt(tx, ty)
     if not entity then entity = session:warpAt(tx, ty) end
     if not entity then entity = session:signAt(tx, ty) end
+    return entity ~= nil
   end
-  if entity then return true end
+  local lx = math.floor((tx * Common.CELL_PX - ox) / Common.CELL_PX)
+  local ly = math.floor((ty * Common.CELL_PX - oy) / Common.CELL_PX)
+  for _, w in ipairs(def.warps or {}) do
+    if w.x == lx and w.y == ly then return true end
+  end
+  for _, o in ipairs(def.objects or {}) do
+    if o.x == lx and o.y == ly then return true end
+  end
+  for _, s in ipairs(def.signs or {}) do
+    if s.x == lx and s.y == ly then return true end
+  end
+  -- Gen 2 has no def.signs: readable background events are its signs
+  -- (kinds 0-6; 7 ITEM / 8 COPY are not).
+  for _, ev in ipairs(def.bgEvents or {}) do
+    if (ev.kind or 0) <= 6 and ev.x == lx and ev.y == ly then return true end
+  end
   return false
 end
 

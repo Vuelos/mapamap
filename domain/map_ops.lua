@@ -352,9 +352,11 @@ local Graft = require("mods.mapamap.engine.graft")
   
   if changed then
     for tilesetId in pairs(graftedTilesets) do
-      Graft.invalidateTileset(self.data, tilesetId)
-      Graft.materialize(self.data, tilesetId)
-      self._thumbBundles = {}
+      -- The stamp grew this tileset's atlas: live renderers hold the
+      -- pre-growth texture (TileRenderer:rebuild only drops the draw
+      -- window), so remount every map built on it or grafted cells draw
+      -- blank until the player enters each map.
+      WorldAdapter.reloadTilesetRenderers(self, tilesetId)
     end
     for _, g in pairs(groups) do
       if self.undo then
@@ -369,6 +371,127 @@ local Graft = require("mods.mapamap.engine.graft")
   self:refreshLiveRenderers()
   if self.refreshObjects then
     self:refreshObjects()
+  end
+  return changed
+end
+
+-- Stamps a terrain brush at world block (wx, wy): resolves the cell's join
+-- mask against every visible laid-out map, paints the matching slot tile,
+-- then re-evaluates the 8 surrounding cells that already carry brush tiles so
+-- their edges/corners re-shape to blend with the new cell.  A center over
+-- open void first tries to create a host map (like blueprint stamps); cells
+-- still on void after that are skipped.  Undo/renderer handling mirrors
+-- paintBlueprint: one delta-capture per touched map.
+function MapOps.paintBrush(self, brush, wx, wy)
+  local Brushes = require("mods.mapamap.domain.brushes")
+  local Neighbors = require("mods.mapamap.domain.neighbors")
+  local Graft = require("mods.mapamap.engine.graft")
+  if not Brushes.isComplete(brush) then return false end
+
+  local natives = {}
+  local function nativeOf(def)
+    local key = def
+    local n = natives[key]
+    if n == nil then
+      local ts = self.data and self.data.tilesets and self.data.tilesets[def.tileset]
+      n = (ts and #ts.blocks) or 0
+      natives[key] = n
+    end
+    return n
+  end
+
+  -- One world block's stored id + owning def, or nil when it is void.
+  local function blockAt(bx, by)
+    local mapId, def, ox, oy =
+      Neighbors.mapAt(self.def, self.neighbors, bx * 2, by * 2)
+    if not def then return nil end
+    local lx = math.floor((bx * BLOCK_PX - (ox or 0)) / BLOCK_PX)
+    local ly = math.floor((by * BLOCK_PX - (oy or 0)) / BLOCK_PX)
+    if lx < 0 or ly < 0 or lx >= def.width or ly >= def.height then return nil end
+    return def.blocks[ly * def.width + lx + 1], def, mapId
+  end
+
+  local function ownsAt(bx, by)
+    local bid, def = blockAt(bx, by)
+    if not bid then return false end
+    return Brushes.ownsBlock(brush, def, nativeOf(def), bid)
+  end
+
+  local groups = {}
+  local graftedTilesets = {}
+  local function writeTile(bx, by, item)
+    local mapId, def, ox, oy =
+      Neighbors.mapAt(self.def, self.neighbors, bx * 2, by * 2)
+    if not def then return false end
+    local lx = math.floor((bx * BLOCK_PX - (ox or 0)) / BLOCK_PX)
+    local ly = math.floor((by * BLOCK_PX - (oy or 0)) / BLOCK_PX)
+    if lx < 0 or ly < 0 or lx >= def.width or ly >= def.height then return false end
+    local tile = item.id
+    local srcTs = item.srcTileset or item.tileset
+    if srcTs and srcTs ~= def.tileset then
+      local grafted = Graft.importBlock(self.data, def.tileset, def, srcTs, item.id)
+      if not grafted then return false end
+      tile = grafted
+      graftedTilesets[def.tileset] = true
+    end
+    local idx = ly * def.width + lx + 1
+    if def.blocks[idx] == tile then return false end
+    local gkey = mapId or "__root"
+    local g = groups[gkey]
+    if not g then
+      g = { mapId = mapId, def = def, changedIndices = {}, oldValues = {} }
+      groups[gkey] = g
+    end
+    g.changedIndices[#g.changedIndices + 1] = idx
+    g.oldValues[#g.oldValues + 1] = def.blocks[idx]
+    def.blocks[idx] = tile
+    return true
+  end
+
+  -- Center over void: try to grow a host map first (single-block stamp).
+  if not blockAt(wx, wy) then
+    self:createMapAtCursor(wx, wy, 1, 1)
+  end
+
+  local changed = false
+  local centerItem = Brushes.tileFor(brush, Brushes.maskFrom(function(dx, dy)
+    return ownsAt(wx + dx, wy + dy)
+  end))
+  if centerItem then
+    changed = writeTile(wx, wy, centerItem) or changed
+  end
+
+  -- Re-blend the ring: every neighbor that already carries a brush tile gets
+  -- its mask recomputed (now including the new center) and repainted.
+  local RING = { { 0, -1 }, { 1, -1 }, { -1, -1 }, { -1, 0 },
+                 { 1, 0 }, { -1, 1 }, { 0, 1 }, { 1, 1 } }
+  for _, off in ipairs(RING) do
+    local rx, ry = wx + off[1], wy + off[2]
+    if ownsAt(rx, ry) then
+      local item = Brushes.tileFor(brush, Brushes.maskFrom(function(dx, dy)
+        return ownsAt(rx + dx, ry + dy)
+      end))
+      if item then changed = writeTile(rx, ry, item) or changed end
+    end
+  end
+
+  if changed then
+    for tilesetId in pairs(graftedTilesets) do
+      -- The stamp grew this tileset's atlas: live renderers hold the
+      -- pre-growth texture (TileRenderer:rebuild only drops the draw
+      -- window), so remount every map built on it or grafted cells draw
+      -- blank until the player enters each map.
+      WorldAdapter.reloadTilesetRenderers(self, tilesetId)
+    end
+    for _, g in pairs(groups) do
+      if self.undo then
+        self.undo:capture(g.def, nil, nil, g.mapId, g.changedIndices, g.oldValues)
+      end
+      if g.mapId ~= nil then self.neighborDirty[g.mapId] = true end
+      rebuildFor(self, g.mapId)
+    end
+    self.mapChanged = true
+    self:refreshLiveRenderers()
   end
   return changed
 end

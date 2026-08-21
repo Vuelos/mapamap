@@ -9,6 +9,7 @@
 --   * the bottom hotbar (components/hotbar)
 --   * the left inventory panel (components/inventory)
 --   * the tileset picker panel (components/picker)
+--   * the Brush Maker panel (components/brush_editor)
 --   * the Details modal (components/details)
 --
 -- World markers (cursor/selection/warps/dest-pick) draw first so the HUD
@@ -28,6 +29,7 @@ local Hotbar = require("mods.mapamap.components.hotbar")
 local Toolbar = require("mods.mapamap.components.toolbar")
 local Picker = require("mods.mapamap.components.picker")
 local Inventory = require("mods.mapamap.components.inventory")
+local BrushEditor = require("mods.mapamap.components.brush_editor")
 local Text = require("mods.mapamap.components.text")
 
 local Overlay = {}
@@ -242,13 +244,14 @@ end
 -- their tiles across a border cross; the session's own layout is the fallback
 -- when no live overworld is available.
 
-local function makeVisibleGetter(field, sessionMethod, resultKey)
+local function makeVisibleGetter(field, sessionMethod, resultKey, resolver)
+  resolver = resolver or function(def) return def and def[field] end
   return function(session, game)
     if worldObscured(game) then return {} end
     local ow = game and (game.overworld or game.world)
     local out = {}
     local function collect(def, ox, oy)
-      for _, e in ipairs(def and def[field] or {}) do
+      for _, e in ipairs(resolver(def) or {}) do
         out[#out + 1] = { [resultKey] = e, ox = ox, oy = oy }
       end
     end
@@ -498,6 +501,9 @@ function Overlay.draw(session, game, viewport)
         listScroll = Input.pickerTilesetScroll,
         dropOpen = Input.pickerDropOpen,
       }, session.font)
+    end
+    if Input.showBrushEditor then
+      BrushEditor.draw(session, Input.brushDraft, vw, vh, session.font)
     end
     if Input.details then
       local Details = require("mods.mapamap.components.details")

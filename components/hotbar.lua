@@ -73,7 +73,7 @@ function Hotbar.apply(ui, session)
   if item.kind == "sprite" then
     session.selectedSprite = item.id
   elseif item.kind == "item" or item.kind == "blueprint"
-         or item.kind == "entity" then
+         or item.kind == "brush" or item.kind == "entity" then
     -- Entity tools place entities and never map to a block/sprite brush.
     session.selectedSprite = nil
     session.selectedBlock = nil

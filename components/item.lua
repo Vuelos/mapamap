@@ -77,6 +77,32 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
     return true
   end
 
+  -- Brushes preview their resolved 3x3 core: every core position falls back
+  -- to its assigned tile so sparse brushes still read as terrain.
+  if item.kind == "brush" then
+    local Brushes = require("mods.mapamap.domain.brushes")
+    local cell = math.max(1, math.floor(boxSize / 3))
+    local ox = x + math.floor((boxSize - cell * 3) / 2)
+    local oy = y + math.floor((boxSize - cell * 3) / 2)
+    local any = false
+    for i, key in ipairs(Brushes.CORE) do
+      local _, slotItem = Brushes.resolve(item, key)
+      if slotItem then
+        local col = (i - 1) % 3
+        local row = math.floor((i - 1) / 3)
+        Item.draw(session, slotItem, ox + col * cell, oy + row * cell, cell,
+          tileset, A)
+        any = true
+      end
+    end
+    if not any then
+      love.graphics.setColor(0.35, 0.6, 1, 0.5 * A)
+      love.graphics.rectangle("fill", x, y, boxSize, boxSize)
+      love.graphics.setColor(1, 1, 1, A)
+    end
+    return true
+  end
+
   if item.kind == "block" then
     -- A foreign-tagged block (srcTileset/tileset) thumbs from its OWN tileset
     -- bundle (grown/own atlas), never the live map's renderer -- the id
@@ -175,10 +201,12 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
         love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
       end
       love.graphics.setColor(1, 1, 1, A)
+      local destLabel = item.destMap
+        or (item.create and item.create.destMap) or nil
       if session.font and item.newWarp then
         session.font.draw("NEW", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
-      elseif session.font and item.destMap then
-        session.font.draw(item.destMap, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+      elseif session.font and destLabel then
+        session.font.draw(destLabel, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
       end
       return true
     end
@@ -196,9 +224,11 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
         end
         return true
       end
+      -- A creator tool (create payload) previews the sprite it will place.
       local o = item.obj
-      if o and o.sprite and session.data and session.data.sprites[o.sprite] then
-        return Item.draw(session, { kind = "sprite", id = o.sprite }, x, y, boxSize, nil, A)
+      local spr = o and o.sprite or (item.create and item.create.sprite)
+      if spr and session.data and session.data.sprites[spr] then
+        return Item.draw(session, { kind = "sprite", id = spr }, x, y, boxSize, nil, A)
       end
       love.graphics.setColor(0.35, 0.8, 0.4, 0.65 * A)
       love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
@@ -214,8 +244,10 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
       love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
       love.graphics.setColor(1, 1, 1, 0.85 * A)
       love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      if session.font and item.sign and item.sign.label then
-        session.font.draw(item.sign.label, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
+      local signLabel = (item.sign and item.sign.label)
+        or (item.create and item.create.label) or nil
+      if session.font and signLabel then
+        session.font.draw(signLabel, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
       end
       return true
     end

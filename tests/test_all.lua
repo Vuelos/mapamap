@@ -25,6 +25,7 @@ local SUITES = {
   require("mods.mapamap.tests.warp_tests"),
   require("mods.mapamap.tests.object_tests"),
   require("mods.mapamap.tests.details_tests"),
+  require("mods.mapamap.tests.brush_tests"),
 }
 
 local allOk = true

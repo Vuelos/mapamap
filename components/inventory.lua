@@ -28,6 +28,7 @@ Inventory.TABS = {
   { key = "tiles", label = "Tiles" },
   { key = "entities", label = "Entities" },
   { key = "blueprints", label = "Blueprints" },
+  { key = "brushes", label = "Brushes" },
 }
 
 -- The tab an item belongs to, by kind.
@@ -36,6 +37,7 @@ function Inventory.tabFor(item)
   if k == "block" then return 1 end
   if k == "entity" or k == "sprite" or k == "item" then return 2 end
   if k == "blueprint" then return 3 end
+  if k == "brush" then return 4 end
   return 2
 end
 
