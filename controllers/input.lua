@@ -9,8 +9,8 @@
 --   * wheel     -> scroll the open picker (or cycle hotbar when closed)
 --   * digit keys -> select a hotbar slot directly
 --   * dragging  -> from the picker onto a hotbar slot assigns that item
---   * B         -> open the inventory's Blueprints tab (preview panel)
 --   * R         -> toggle rectangle-select blueprint capture (LMB drag)
+--   * E / M     -> tileset picker / Brush Maker
 --
 -- This module only routes input.  The UI controller state it reads and mutates
 -- lives here on the Input table, the brush/tool drag state lives in
@@ -40,6 +40,7 @@ local Details = require("mods.mapamap.components.details")
 local EncEditor = require("mods.mapamap.components.encounter_editor")
 local BrushEditor = require("mods.mapamap.components.brush_editor")
 local EntitySelector = require("mods.mapamap.components.entity_selector")
+local EntityCreator = require("mods.mapamap.components.entity_creator")
 local Brushes = require("mods.mapamap.domain.brushes")
 local Blueprints = require("mods.mapamap.domain.blueprints")
 local Paint = require("mods.mapamap.domain.paint")
@@ -87,6 +88,12 @@ Input.showBrushEditor = false
 Input.brushDraft = Brushes.new("Brush")
 Input.brushSource = nil
 
+-- Entity creation workflow: the selector lists the creatable types and the
+-- creator form (Input.entityCreator) holds the required-data fields for the
+-- chosen one.  CREATE arms the selected hotbar slot with the configured tool.
+Input.showEntitySelector = false
+Input.entityCreator = nil
+
 -- Blueprint support: a rectangle-select capture mode.  Captured blueprints are
 -- stored whole as items in the inventory's Blueprints tab (the inventory is
 -- the single blueprint container; there is no separate book).
@@ -108,7 +115,13 @@ Input.encEditor = nil         -- { session, fields, index, editing } or nil
 -- armed forever.  Every move reconciles the flags against the physical mouse,
 -- so letting the button up always ends the drag even if its event never
 -- arrives.  No-op when love.mouse.isDown is unavailable (headless harnesses).
-local function finishDragDrop(mx, my)
+
+-- Settles an in-flight drag at (mx, my): drops onto a Brush Maker slot, an
+-- Entity Creator field, a hotbar slot (swap / assign), or the inventory.
+-- Returns true when the drag item was consumed.  This is THE drop path -- used
+-- by both mousereleased and the lost-release reconcile below so the two can
+-- never diverge again.
+local function dropDragItem(session, mx, my)
   if not Input.dragItem then return false end
   local vw, vh = love.graphics.getDimensions()
   -- Dropping on a Brush Maker slot stores a copy of the tile there (only
@@ -119,32 +132,41 @@ local function finishDragDrop(mx, my)
       if Input.dragItem.kind == "block" then
         Brushes.setSlot(Input.brushDraft, key, Common.deepCopy(Input.dragItem))
       end
-      Input.dragItem = nil
-      Input.dragFromSlot = nil
+      Input.dragItem, Input.dragFromSlot = nil, nil
       return true
     end
+  end
+  -- Dropping on an Entity Creator field (sprite slot / species / item).
+  if Input.entityCreator
+      and EntityCreator.acceptDrop(Input, session, mx, my, Input.dragItem) then
+    Input.dragItem, Input.dragFromSlot = nil, nil
+    return true
   end
   local slot = Hotbar.at(vw, vh, mx, my)
   local fromSlot = Input.dragFromSlot
   if slot then
     if fromSlot and fromSlot ~= slot then
+      -- Hotbar-to-hotbar: swap the two slots so nothing is lost.
       Input.hotbar[fromSlot], Input.hotbar[slot] =
         Input.hotbar[slot], Input.hotbar[fromSlot]
       Input.selected = slot
     elseif not fromSlot then
+      -- A dragged picker/blueprint entry dropped on the hotbar takes the slot.
       Input.hotbar[slot] = Input.dragItem
       Input.selected = slot
     end
     Input.applySelection(session)
   elseif Input.showInventory and Inventory.over(vw, vh, mx, my) then
-    Input.addInventory(Input.dragItem)
+    -- A dragged hotbar/picker entry dropped on the inventory lands in the
+    -- user's collection (the hotbar copy stays).  The panel stays put: the
+    -- entry only shows on its respective tab.
+    Input.addInventory(Input.dragItem, { silent = true })
   end
-  Input.dragItem = nil
-  Input.dragFromSlot = nil
+  Input.dragItem, Input.dragFromSlot = nil, nil
   return true
 end
 
-local function reconcileMouseHeld()
+local function reconcileMouseHeld(session)
   local isDown = love.mouse.isDown
   if not isDown then return end
   if Input.mouseButtons[1] and not isDown(1) then
@@ -154,7 +176,7 @@ local function reconcileMouseHeld()
       -- A physical release outside the UI can happen without the release event
       -- reaching us: settle the drag right here so it cannot remain stranded.
       local mx, my = love.mouse.getPosition()
-      finishDragDrop(mx, my)
+      dropDragItem(session, mx, my)
     end
   end
   if Input.mouseButtons[2] and not isDown(2) then
@@ -179,6 +201,7 @@ end
 function Input.cancelled()
   Input.mouseButtons = { [1] = false, [2] = false, [3] = false }
   Input.encEditor = nil
+  Input.entityCreator = nil
   Input.dragItem = nil
   Input.dragFromSlot = nil
   EditorTools.cancelled()
@@ -191,9 +214,14 @@ end
 
 function Input.configure(initial) State.configure(Input, initial) end
 function Input.serialize() return State.serialize(Input) end
-function Input.addInventory(item) Inventory.add(Input, item) end
+function Input.addInventory(item, opts) Inventory.add(Input, item, opts) end
 function Input.inventoryList(session) return Inventory.list(Input) end
-function Input.openDetails(session, target) Details.open(Input, session, target) end
+function Input.openDetails(session, target)
+  -- Details draws at the selector's spot: drop the creation form so the two
+  -- never overlap.
+  Input.entityCreator = nil
+  Details.open(Input, session, target)
+end
 function Input.closeDetails() Details.close(Input) end
 function Input.keyDetails(session, key) return Details.key(Input, session, key) end
 function Input.reset()
@@ -281,6 +309,12 @@ function Input.editBrush(item)
   return true
 end
 
+-- Opens the Entity Creator form for a selector type (the selector button
+-- click routes here).
+function Input.openCreator(session, typeKey)
+  return EntityCreator.open(Input, session, typeKey)
+end
+
 -- ---------------------------------------------------------------------------
 -- Toolbar toggle helpers (shared between keyboard and mouse)
 
@@ -290,12 +324,16 @@ local function toggleInventory()
     Input.showBrushEditor = false
     Input.details = nil
     Input.encEditor = nil
+    Input.showEntitySelector = false
+    Input.entityCreator = nil
   end
   Input.showInventory = not Input.showInventory
 end
 
 local function toggleEncounters(session)
   Input.showPicker = false
+  Input.showEntitySelector = false
+  Input.entityCreator = nil
   if Input.encEditor then
     Input.encEditor = nil
   else
@@ -307,11 +345,30 @@ end
 local function togglePicker()
   Input.showPicker = not Input.showPicker
   if Input.showPicker then
+    -- The picker shares the selector's side-panel spot.
+    Input.showEntitySelector = false
+    Input.entityCreator = nil
     Input.showInventory = true
   end
   Input.pickerScroll = 1
   Input.pickerTilesetScroll = 1
   Input.pickerDropOpen = false
+end
+
+-- Entity creation workflow: toggles the selector + creator panel pair.  The
+-- picker/details/encounter editor share the selector's spot, so opening the
+-- factory closes them.
+local function toggleFactory(session)
+  if Input.showEntitySelector then
+    Input.showEntitySelector = false
+    Input.entityCreator = nil
+  else
+    Input.showPicker = false
+    Input.details = nil
+    Input.encEditor = nil
+    Input.showEntitySelector = true
+    Input.showInventory = true
+  end
 end
 
 local function toggleBlueprint()
@@ -381,6 +438,61 @@ function Input.mousepressed(session, game, mx, my, button)
     end
     Input.closeDetails()
     return true
+  end
+  -- Entity Creator form (docked next to the selector): consume clicks inside
+  -- it so the world never paints underneath; outside clicks fall through so
+  -- the hotbar/toolbar stay reachable while a form is open.
+  if Input.entityCreator and button then
+    if EntityCreator.mousepressed(Input, session, mx, my, button) then
+      return true
+    end
+  end
+  -- Entity Selector buttons: clicking a type opens/retargets the creator
+  -- form (encounters are not creatable here; they keep the N/toolbar editor).
+  if Input.showEntitySelector and button == 1 then
+    local tIdx = EntitySelector.buttonAt(vw, vh, mx, my)
+    if tIdx then
+      Input.openCreator(session, EntitySelector.TYPES[tIdx].key)
+      return true
+    end
+    if EntitySelector.over(vw, vh, mx, my) then return true end
+  end
+  -- Brush Maker panel: buttons run on click; a filled slot is picked back up
+  -- as a drag copy (LMB) or cleared (RMB); any other press inside the panel
+  -- is consumed so the world underneath never paints.
+  if Input.showBrushEditor and button then
+    local which = BrushEditor.buttonAt(vw, vh, mx, my)
+    if which == "save" then
+      Input.saveBrushDraft()
+      return true
+    elseif which == "clear" then
+      Input.clearBrushDraft()
+      return true
+    elseif which == "delete" then
+      Input.deleteBrushSource()
+      return true
+    end
+    local key = BrushEditor.slotKeyAt(vw, vh, mx, my)
+    if key then
+      if button == 2 then
+        Brushes.setSlot(Input.brushDraft, key, nil)
+      elseif button == 1 then
+        local held = Hotbar.selected(Input)
+        if held and held.kind == "block" then
+          -- A tile on the hotbar paints the slot directly (click or drag).
+          Brushes.setSlot(Input.brushDraft, key, Common.deepCopy(held))
+        else
+          -- Nothing selected: click grabs the slot's tile onto the hotbar.
+          local cur = Brushes.slot(Input.brushDraft, key)
+          if cur then
+            Input.hotbar[Input.selected] = Common.deepCopy(cur)
+            Input.applySelection(session)
+          end
+        end
+      end
+      return true
+    end
+    if BrushEditor.over(vw, vh, mx, my) then return true end
   end
   -- Blueprint capture is armed.  The first LMB click anchors the rectangle's
   -- start corner; the second LMB click finalizes the end corner, captures the
@@ -468,6 +580,24 @@ function Input.mousepressed(session, game, mx, my, button)
         Input.inventory.scroll = 1
         return true
       end
+      -- The first grid cell of every tab is that tab's toolbar shortcut:
+      -- [E] picker on Tiles, [F] factory on Entities, [R] blueprint
+      -- rect-select on Blueprints, [M] Brush Maker on Brushes.
+      local sc = Inventory.shortcutAt(vw, vh, mx, my)
+      if sc then
+        local tab = Input.inventory.tab
+        if tab == 2 then
+          toggleFactory(session)
+        elseif tab == 3 then
+          Input.showPicker = false
+          toggleBlueprint()
+        elseif tab == 4 then
+          toggleBrushMaker()
+        else
+          togglePicker()
+        end
+        return true
+      end
       local idx = Inventory.itemAt(vw, vh, mx, my, Input.inventory.scroll)
       if idx then
         local item = Inventory.list(Input)[idx]
@@ -509,20 +639,7 @@ function Input.mousepressed(session, game, mx, my, button)
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
-      pickedEntity = session:objectAt(tx, ty)
-      if pickedEntity then
-        pickedType = "object"
-      else
-        pickedEntity = session:warpAt(tx, ty)
-        if pickedEntity then
-          pickedType = "warp"
-        else
-          pickedEntity = session:signAt(tx, ty)
-          if pickedEntity then
-            pickedType = "sign"
-          end
-        end
-      end
+      pickedEntity, pickedType = session:entityAt(tx, ty)
     end
     if pickedEntity then
       session.selectedItem = pickedEntity
@@ -563,20 +680,7 @@ function Input.mousepressed(session, game, mx, my, button)
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
-      entity = session:objectAt(tx, ty)
-      if entity then
-        entityType = "object"
-      else
-        entity = session:warpAt(tx, ty)
-        if entity then
-          entityType = "warp"
-        else
-          entity = session:signAt(tx, ty)
-          if entity then
-            entityType = "sign"
-          end
-        end
-      end
+      entity, entityType = session:entityAt(tx, ty)
       if not entity then
         mapId, mapDef = Neighbors.mapAt(session.def, session.neighbors, tx, ty)
       end
@@ -618,41 +722,7 @@ function Input.mousereleased(session, mx, my, button)
     end
     return true
   end
-  if button == 1 and Input.dragItem then
-    local vw, vh = love.graphics.getDimensions()
-    -- Brush Maker drop: a block tile dropped on a slot joins the draft.
-    if Input.showBrushEditor then
-      local key = BrushEditor.slotKeyAt(vw, vh, mx, my)
-      if key then
-        if Input.dragItem.kind == "block" then
-          Brushes.setSlot(Input.brushDraft, key, Common.deepCopy(Input.dragItem))
-        end
-        Input.dragItem = nil
-        Input.dragFromSlot = nil
-        return true
-      end
-    end
-    local slot = Hotbar.at(vw, vh, mx, my)
-    local fromSlot = Input.dragFromSlot
-    if slot then
-      if fromSlot and fromSlot ~= slot then
-        -- Hotbar-to-hotbar: swap the two slots so nothing is lost.
-        Input.hotbar[fromSlot], Input.hotbar[slot] =
-          Input.hotbar[slot], Input.hotbar[fromSlot]
-        Input.selected = slot
-      elseif not fromSlot then
-        -- A dragged picker/blueprint entry dropped on the hotbar takes the slot.
-        Input.hotbar[slot] = Input.dragItem
-        Input.selected = slot
-      end
-      Input.applySelection(session)
-    elseif Input.showInventory and Inventory.over(vw, vh, mx, my) then
-      -- A dragged hotbar/picker entry dropped on the inventory lands in the
-      -- user's collection (the hotbar copy stays).
-      Input.addInventory(Input.dragItem)
-    end
-    Input.dragItem = nil
-    Input.dragFromSlot = nil
+  if button == 1 and dropDragItem(session, mx, my) then
     return true
   end
   if button == 2 then
@@ -708,7 +778,7 @@ function Input.mousemoved(session, mx, my)
   if not session then return false end
   -- A release that was lost (focus flip, cancel) must still end the drag; the
   -- physical button state is the final word on whether the brush is live.
-  reconcileMouseHeld()
+  reconcileMouseHeld(session)
   if Input.blueprintMode and Input.selectStart then
     -- Extend the selection rectangle (or preview under the cursor); marking the
     -- move distinguishes a drag-release capture from a two-click selection.
@@ -755,9 +825,15 @@ function Input.wheelmoved(session, dy)
   if Input.showBrushEditor and BrushEditor.over(vw, vh, mx, my) then
     return true
   end
+  -- Entity Creator: scroll the open dropdown list when the wheel is over the
+  -- form (consume so it never cycles the hotbar underneath).
+  if Input.entityCreator and EntityCreator.over(vw, vh, mx, my) then
+    EntityCreator.scroll(Input, dy)
+    return true
+  end
   if Input.showInventory and Inventory.over(vw, vh, mx, my) then
     local list = Inventory.list(Input)
-    local per = Inventory.perPage(vw, vh)
+    local per = Inventory.contentPerPage(vw, vh)
     local max = math.max(1, math.ceil(#list / per))
     Input.inventory.scroll = math.max(1, math.min(Input.inventory.scroll + dy, max))
     return true
@@ -797,11 +873,16 @@ end
 -- Keyboard: returns true when the key was consumed by the overlay.
 function Input.keypressed(session, key)
   -- Modal panels own the keyboard while open; encounter editor takes priority
-  -- over Details since it's a deeper workflow.
+  -- over Details since it's a deeper workflow.  The Entity Creator form sits
+  -- at the same level: while open it consumes keys (Esc closes it).
   if Input.encEditor then return EncEditor.key(Input, session, key) end
   if Input.details then return Input.keyDetails(session, key) end
+  if Input.entityCreator then return EntityCreator.key(Input, session, key) end
   if key == "n" then
     toggleEncounters(session)
+    return true
+  elseif key == "f" then
+    toggleFactory(session)
     return true
   elseif key == "c" then
     -- Arm graphical destination-pick for the selected warp: the next world
@@ -812,15 +893,6 @@ function Input.keypressed(session, key)
     return true
   elseif key == "e" then
     togglePicker()
-    return true
-  elseif key == "b" then
-    -- Open the inventory and focus the Blueprints tab (index 3).
-    Input.showInventory = not Input.showInventory
-    Input.showPicker = false
-    if Input.showInventory then
-      Input.inventory.tab = 3
-      Input.inventory.scroll = 1
-    end
     return true
   elseif key == "m" then
     toggleBrushMaker()
@@ -881,11 +953,8 @@ function Input.mouseHoveringSingleCellItem(session)
     tx, ty)
   if not def then return false end
   if not mapId then
-    -- Current map: keep the session's own (index-backed) lookups.
-    local entity = session:objectAt(tx, ty)
-    if not entity then entity = session:warpAt(tx, ty) end
-    if not entity then entity = session:signAt(tx, ty) end
-    return entity ~= nil
+    -- Current map: the session's unified entityAt (object > warp > sign).
+    return session:entityAt(tx, ty) ~= nil
   end
   local lx = math.floor((tx * Common.CELL_PX - ox) / Common.CELL_PX)
   local ly = math.floor((ty * Common.CELL_PX - oy) / Common.CELL_PX)

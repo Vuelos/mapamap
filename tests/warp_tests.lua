@@ -39,10 +39,12 @@ end
 
 local VW, VH = 640, 576
 
--- Centre of inventory grid cell `i` (1-based) in the active tab's grid.
+-- Centre of inventory CONTENT cell `i` (1-based) on the active tab.  The
+-- first grid slot is the tab's toolbar shortcut, so content starts at the
+-- second cell.
 local function inventoryCellCentre(i)
   local px, py = Inventory.rect(VW, VH)
-  local ci = i - 1
+  local ci = i
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
   return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
@@ -81,29 +83,36 @@ local function stubTransform()
   return function() Coords.transform = orig end
 end
 
+-- A creator-built warp tool carries its destination as a `create` payload;
+-- painting it inserts exactly ONE warp at the cell.
+local function newWarpTool()
+  return { kind = "entity", entityType = "warp",
+           create = { destMap = "PALLET_TOWN", destWarp = 0 } }
+end
+
 function test_templatePaintPlacesSingleWarp()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   resetInput()
   Input.reset()
-  Input.hotbar[1] = { kind = "warp", newWarp = true }
+  Input.hotbar[1] = newWarpTool()
   Input.selected = 1
   local restore = stubTransform()
   local spent = Input.paintAt(s, 16 * 4 + 8, 16 * 5 + 8)
   restore()
-  assert(spent, "painting the New Warp template should succeed")
-  assert(#s.def.warps == 1, "the template places exactly ONE warp, not a pair")
+  assert(spent, "painting a warp tool should succeed")
+  assert(#s.def.warps == 1, "the tool places exactly ONE warp, not a pair")
   local w = s.def.warps[1]
   assert(w.x == 4 and w.y == 5, "single warp sits at the painted cell")
   assert(w.destMap == "PALLET_TOWN" and w.destWarp == 0,
-    "fresh warp self-destinations (map itself, warp 0)")
+    "warp keeps the tool's self-destination (map itself, warp 0)")
 end
 
 function test_templatePaintPlacesSingleWarpAnywhere()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   resetInput()
-  Input.hotbar[1] = { kind = "warp", newWarp = true }
+  Input.hotbar[1] = newWarpTool()
   Input.selected = 1
   local restore = stubTransform()
   for _, cell in ipairs({ { 19, 0 }, { 0, 17 }, { 7, 6 } }) do
@@ -113,13 +122,13 @@ function test_templatePaintPlacesSingleWarpAnywhere()
     local before = #s.def.warps
     Input.paintAt(s, tx, ty)
     assert(#s.def.warps == before + 1,
-      "each template paint inserts exactly one warp")
+      "each warp tool paint inserts exactly one warp")
   end
   -- Out-of-map cells are rejected; nothing is inserted.
   local before = #s.def.warps
   Input.reset()
   Input.paintAt(s, 16 * -1, 16 * 2 + 8)
-  assert(#s.def.warps == before, "off-map template paint is rejected")
+  assert(#s.def.warps == before, "off-map warp tool paint is rejected")
   restore()
 end
 
@@ -141,11 +150,11 @@ function test_undoRedoWarpViaKeyboard()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   resetInput()
-  Input.hotbar[1] = { kind = "warp", newWarp = true }
+  Input.hotbar[1] = newWarpTool()
   Input.selected = 1
   local restore = stubTransform()
   Input.reset()
-  assert(Input.paintAt(s, 16 * 2 + 8, 16 * 3 + 8), "template paint succeeds")
+  assert(Input.paintAt(s, 16 * 2 + 8, 16 * 3 + 8), "warp tool paint succeeds")
   restore()
   assert(#s.def.warps == 1, "one warp placed")
   local orig = _G.love.keyboard.isDown
@@ -204,29 +213,36 @@ function test_warpTabLoadsPlacementTool()
   local w = s:placeWarp(2, 2, "ROUTE_1", 1)
   resetInput()
   Input.inventory = { items = {
-    { kind = "warp", destMap = "ROUTE_1", destWarp = 1, warp = w },
-  }, tab = 3, scroll = 1 }
-  assert(Inventory.tabFor({ kind = "warp" }) == 3, "warps mount on the Warps tab")
+    { kind = "entity", entityType = "warp", destMap = "ROUTE_1", destWarp = 1, warp = w },
+  }, tab = 2, scroll = 1 }
+  assert(Inventory.tabFor({ kind = "entity", entityType = "warp" }) == 2,
+    "warps mount on the Entities tab")
   local cx, cy = inventoryCellCentre(1)
   local consumed = Input.mousepressed(s, game, cx, cy, 1)
   assert(consumed, "click on a warp cell is consumed")
   local item = Input.hotbar[1]
-  assert(item and item.kind == "warp", "loaded tool is a warp tool")
+  assert(item and item.kind == "entity" and item.entityType == "warp",
+    "loaded tool is a warp tool")
   assert(item.destMap == "ROUTE_1" and item.destWarp == 1,
     "tool carries the warp's destination")
-  assert(s.selectedWarp == w, "loading a live warp selects it")
+  assert(s.selectedItem == w, "loading a live warp selects it")
 end
 
-function test_warpTemplateCellLoadsNewTool()
+-- The template cells are gone; each tab leads with its own toolbar shortcut
+-- ([E] picker, [F] factory, [R] blueprint rect-select, [M] Brush Maker) and
+-- nothing arms a tool from the empty grid.
+function test_shortcutCellsAreNotItems()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
-  s.def.warps = {}
   resetInput()
-  Input.inventory = { items = { { kind = "warp", newWarp = true } }, tab = 3, scroll = 1 }
+  Input.inventory = { items = {}, tab = 2, scroll = 1 }
+  -- The tab's shortcut cell (first grid slot; centre of content index 0).
+  local sx, sy = inventoryCellCentre(0)
+  assert(Input.mousepressed(s, game, sx, sy, 1), "shortcut click is consumed")
+  assert(Input.hotbar[1] == nil, "shortcut cell arms no tool")
+  -- An empty content cell arms nothing either.
   local cx, cy = inventoryCellCentre(1)
-  assert(Input.mousepressed(s, game, cx, cy, 1), "click on the template is consumed")
-  local item = Input.hotbar[1]
-  assert(item and item.kind == "warp" and item.newWarp,
-    "template cell arms the new-warp tool")
+  assert(Input.mousepressed(s, game, cx, cy, 1), "empty cell click is consumed")
+  assert(Input.hotbar[1] == nil, "empty content cell arms no tool")
 end
 
 function test_warpTabShowsOnlySavedItems()
@@ -243,11 +259,12 @@ function test_inventoryRmbOpensWarpDetails()
   s.def.warps = {}
   local w = s:placeWarp(3, 3)
   resetInput()
-  Input.inventory = { items = { { kind = "warp", warp = w } }, tab = 3, scroll = 1 }
+  Input.inventory = { items = { { kind = "entity", entityType = "warp", warp = w } },
+    tab = 2, scroll = 1 }
   local cx, cy = inventoryCellCentre(1)
   assert(Input.mousepressed(s, game, cx, cy, 2), "RMB on a warp cell is consumed")
   assert(Input.details and Input.details.target
-    and Input.details.target.warp == w, "RMB opens Details for the warp")
+    and Input.details.target.entity == w, "RMB opens Details for the warp")
 end
 
 function test_inventoryRmbOnItemOpensDetails()
@@ -266,7 +283,7 @@ function test_detailsBuildWarpFields()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   local w = s:placeWarp(1, 2, "ROUTE_1", 3)
-  Input.openDetails(s, { warp = w })
+  Input.openDetails(s, { entity = w, entityType = "warp" })
   local d = Input.details
   local keys, types = {}, {}
   for _, f in ipairs(d.fields) do keys[#keys + 1] = f.key; types[f.key] = f.type end
@@ -282,7 +299,7 @@ function test_detailsCommitValidatesDestMap()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   local w = s:placeWarp(0, 0)
-  Input.openDetails(s, { warp = w })
+  Input.openDetails(s, { entity = w, entityType = "warp" })
   local d = Input.details
   d.index = 2 -- destMap
   assert(Details.commit(s, d, d.index, "NOT_A_MAP") == false,
@@ -296,7 +313,7 @@ function test_detailsNudgeWarpNumber()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   local w = s:placeWarp(0, 0, "ROUTE_1", 1)
-  Input.openDetails(s, { warp = w })
+  Input.openDetails(s, { entity = w, entityType = "warp" })
   local d = Input.details
   d.index = 3 -- destWarp
   Details.nudge(s, d, 1)
@@ -309,7 +326,7 @@ function test_detailsKeyboardEditingLabel()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   local w = s:placeWarp(0, 0)
-  Input.openDetails(s, { warp = w })
+  Input.openDetails(s, { entity = w, entityType = "warp" })
   local d = Input.details
   d.index = 4 -- label
   assert(Input.keypressed(s, "return"), "Enter starts the text edit")
@@ -327,7 +344,7 @@ function test_detailsDeleteWarp()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   local w = s:placeWarp(1, 1)
-  Input.openDetails(s, { warp = w })
+  Input.openDetails(s, { entity = w, entityType = "warp" })
   assert(Input.keypressed(s, "x"), "X deletes the target")
   assert(#s.def.warps == 0, "warp removed from the map")
   assert(Input.details == nil, "Details closes after delete")
@@ -337,7 +354,7 @@ function test_detailsModalConsumesAndCloses()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
   local w = s:placeWarp(1, 1)
-  Input.openDetails(s, { warp = w })
+  Input.openDetails(s, { entity = w, entityType = "warp" })
   assert(Input.details, "details open")
   -- Keyboard routing owns all keys while open.
   assert(Input.keypressed(s, "e") == true, "E is consumed by the modal")
@@ -353,7 +370,7 @@ function test_detailsOutsideClickCloses()
   s.def.warps = {}
   local w = s:placeWarp(1, 1)
   resetInput()
-  Input.inventory = { items = { { kind = "warp", warp = w } }, tab = 3, scroll = 1 }
+  Input.inventory = { items = { { kind = "entity", entityType = "warp", warp = w } }, tab = 2, scroll = 1 }
   local cx, cy = inventoryCellCentre(1)
   Input.mousepressed(s, game, cx, cy, 2)
   assert(Input.details, "details open via RMB")
@@ -442,7 +459,7 @@ return {
     "test_connectWarpToCellCreatesReciprocal",
     "test_connectWarpToCellReusesExisting",
     "test_warpTabLoadsPlacementTool",
-    "test_warpTemplateCellLoadsNewTool",
+    "test_shortcutCellsAreNotItems",
     "test_warpTabShowsOnlySavedItems",
     "test_inventoryRmbOpensWarpDetails",
     "test_inventoryRmbOnItemOpensDetails",

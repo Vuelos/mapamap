@@ -400,11 +400,15 @@ function test_deleteRemovesLoadedBrushFromInventory()
     tiles = { c = blk(3), n = blk(4) } }
   Input.inventory.items = { saved }
   Input.inventory.tab = 4
-  -- Load it into the maker (RMB on its cell), then DELETE.
+  -- Load it into the maker (RMB on its cell), then DELETE.  The brush sits
+  -- at the first content cell, right after the tab's shortcut cell.
   local px, py = Inventory.rect(VW, VH)
-  local cx = px + Panel.PAD + Inventory.SLOT / 2
+  local ci = 1
+  local col = ci % Inventory.COLS
+  local row = math.floor(ci / Inventory.COLS)
+  local cx = px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
   local cy = py + Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP + Panel.TAB_H
-    + Inventory.GAP + Inventory.SLOT / 2
+    + Inventory.GAP + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
   Input.mousepressed({}, {}, cx, cy, 2)
   assert(Input.brushSource == saved, "the draft links to the saved brush")
   assert(clickButton("delete") == true)
@@ -449,10 +453,14 @@ function test_rmbBrushCellOpensMaker()
     tiles = { c = blk(3), n = blk(4) },
   } }
   Input.inventory.tab = 4
+  -- The brush sits at the first content cell, after the tab's shortcut.
   local px, py = Inventory.rect(VW, VH)
-  local cx = px + Panel.PAD + Inventory.SLOT / 2
+  local ci = 1
+  local col = ci % Inventory.COLS
+  local row = math.floor(ci / Inventory.COLS)
+  local cx = px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
   local cy = py + Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP + Panel.TAB_H
-    + Inventory.GAP + Inventory.SLOT / 2
+    + Inventory.GAP + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
   assert(Input.mousepressed({}, {}, cx, cy, 2) == true)
   assert(Input.showBrushEditor, "RMB on a brush cell opens the maker")
   assert(Input.brushDraft.name == "Cliff", "draft carries the brush name")

@@ -16,11 +16,11 @@ local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 local Input = require("mods.mapamap.controllers.input")
 local Coords = require("mods.mapamap.engine.coords")
 local Save = require("mods.mapamap.storage.patch_saver")
-local Snapshot = require("mods.mapamap.domain.snapshot")
 local Connections = require("mods.mapamap.domain.connections")
 local MapGrid = require("mods.mapamap.domain.map_grid")
 local Gen = require("mods.mapamap.engine.gen")
 local Hotbar = require("mods.mapamap.components.hotbar")
+local Bridge = require("mods.mapamap.engine.dramaless_bridge")
 
 local Manager = {
   mod = nil,     -- the mod context the active session belongs to
@@ -80,37 +80,17 @@ end
 -- untouched so the caller may keep using or rebind it.
 function Manager.saveMapPatches(mod, s)
   -- Primary map: diff against the original snapshot taken at its open.
-  if s.mapChanged and s._originalSnapshot then
-    local patch = Snapshot.diff(s.def, s._originalSnapshot)
-    if next(patch) then
-      for key, value in pairs(patch) do
-        Save.updatePatchField(mod, s.mapId, key, value)
-      end
-    end
+  if s.mapChanged then
+    Save.diffAndStore(mod, s.mapId, s.def, s._originalSnapshot)
   end
   for mapId in pairs(s._sessionDirty or {}) do
-    local def = s.data and s.data.maps[mapId]
-    local orig = s._sessionOriginals and s._sessionOriginals[mapId]
-    if def and orig then
-      local patch = Snapshot.diff(def, orig)
-      if next(patch) then
-        for key, value in pairs(patch) do
-          Save.updatePatchField(mod, mapId, key, value)
-        end
-      end
-    end
+    Save.diffAndStore(mod, mapId, s.data and s.data.maps[mapId],
+      s._sessionOriginals and s._sessionOriginals[mapId])
   end
   for nbId in pairs(s.neighborDirty or {}) do
     local m = s.neighborMaps and s.neighborMaps[nbId]
-    local orig = s.neighborOriginals and s.neighborOriginals[nbId]
-    if m and m.def and orig then
-      local patch = Snapshot.diff(m.def, orig)
-      if next(patch) then
-        for key, value in pairs(patch) do
-          Save.updatePatchField(mod, nbId, key, value)
-        end
-      end
-    end
+    Save.diffAndStore(mod, nbId, m and m.def,
+      s.neighborOriginals and s.neighborOriginals[nbId])
   end
   -- New maps are stored whole (data.maps has no entry to diff against yet).
   if s._newMaps then
@@ -152,7 +132,11 @@ function Manager.seedInput(mod, s)
   Input.loadInventory(mod)
   if #Input.inventory.items == 0 then
     for i = 1, Hotbar.SLOTS do
-      if Input.hotbar[i] then Input.addInventory(Input.hotbar[i]) end
+      -- Silent: seeding files each hotbar entry on its own tab without
+      -- dragging the panel's view along.
+      if Input.hotbar[i] then
+        Input.addInventory(Input.hotbar[i], { silent = true })
+      end
     end
   end
 end
@@ -168,11 +152,20 @@ function Manager.resolveData(game)
     merged.maps = world.maps or merged.maps
     merged.tilesets = world.tilesets or merged.tilesets
   end
-  -- Gen 2 renames: raw game.data carries gen2Encounters (the engine's
-  -- Gen2Compat facade is what exposes it as .encounters, and this reads raw),
-  -- so forward it or the encounter editor finds no source table at all.
-  if not merged.encounters and data then
-    merged.encounters = data.gen2Encounters
+  -- Gen 2 renames: raw game.data carries gen2Xxx keys (the engine's
+  -- Gen2Compat facade is what exposes them under the Gen 1 names, and this
+  -- reads raw) -- forward the whole set or the picker's sprite catalog,
+  -- encounter editor, etc. find no source table at all.
+  if data then
+    local RENAMES = {
+      sprites = "gen2Sprites", maps = "gen2Maps", tilesets = "gen2Tilesets",
+      text = "gen2Text", encounters = "gen2Encounters",
+      palettes = "gen2Palettes", icons = "gen2Icons",
+      battle_anims = "gen2BattleAnims",
+    }
+    for name, raw in pairs(RENAMES) do
+      merged[name] = merged[name] or data[raw]
+    end
   end
   if not merged.maps then
     local Data = require("src.core.Data")
@@ -211,6 +204,11 @@ function Manager.open(mod, game)
   Manager.seedInput(mod, s)
   Manager.session = s
   Manager.active = true
+  -- Renderer-mod integration: widen the rendered neighbor ring while the
+  -- session is open so the expanded grid shows in the drawn set (flat strips
+  -- and a voxel scene alike), and register the mod api for cross-mod lookups.
+  Bridge.init(mod)
+  Bridge.expandRenderRadius(game)
   -- Retire any brush held from a previous session and clear transient UI state.
   Input.reset()
   return true
@@ -234,10 +232,12 @@ function Manager.autoSave()
 end
 
 -- Closes the active session: persists every edit, resets the controller/brush
--- state, and deactivates the overlay.
+-- state, restores the rendered neighbor ring, and deactivates the overlay.
 function Manager.close()
+  local game = Manager.session and Manager.session.game
   if Manager.mod then Manager.persist(Manager.mod) end
   Input.reset()
+  Bridge.restoreRenderRadius(game)
   Manager.active = false
   Manager.session = nil
   Manager.mod = nil
@@ -313,6 +313,10 @@ function Manager.replayPatches(mod)
   local Graft = require("mods.mapamap.engine.graft")
   Graft.materializeAll(data)
   Gen.invalidateAll(data, game)
+  -- Renderer-mod integration: a replay rewrites whole block layers behind
+  -- any voxel mesher's back.  Drop its caches wholesale -- cheap when the
+  -- renderer mod is absent or nothing was ever meshed.
+  Bridge.invalidateAll()
   -- Gen 2: the World caches its neighbor strip list in `world.neighbors`; a
   -- save.loaded replay can add brand-new map defs (and new connections on
   -- existing ones) that the cached neighbor set does not know about yet.

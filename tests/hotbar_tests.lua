@@ -29,6 +29,10 @@ local function resetInput()
   Input.selected = 1
   Input.showPicker = false
   Input.pickerScroll = 1
+  -- Pin the browsed catalog to nil (the current map's tileset) so picker-cell
+  -- clicks always land on blocks regardless of what earlier suites left in
+  -- the shared Input state (State.reset defaults People).
+  Input.pickerTileset = nil
   Input.pickerTilesetScroll = 1
   Input.dragItem = nil
   Input.inventory = { items = {}, tab = 1, scroll = 1 }
@@ -49,10 +53,12 @@ local function pickerCellCentre(i)
          gy + row * (PickerM.SLOT + PickerM.GAP) + PickerM.SLOT / 2
 end
 
--- Centre of inventory grid cell `i` (1-based) on the active tab.
+-- Centre of inventory CONTENT cell `i` (1-based) on the active tab.  The
+-- first grid slot is the tab's toolbar shortcut, so content starts at the
+-- second cell.
 local function inventoryCellCentre(i)
   local px, py = Inventory.rect(VW, VH)
-  local ci = i - 1
+  local ci = i
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
   return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
@@ -88,9 +94,10 @@ function test_blueprintClickReplacesSelectedSlot()
   local s = Session.new(mod, game, "PALLET_TOWN")
   assert(s, "no session")
   Input.reset()
+  -- Blueprints live on tab 3 (Tiles / Entities / Blueprints / Brushes).
   Input.inventory = {
     items = { { kind = "blueprint", id = "BP_TEST", w = 1, h = 1, tiles = { 0 } } },
-    tab = 4, scroll = 1,
+    tab = 3, scroll = 1,
   }
   Input.selected = 1
   Input.hotbar[1] = { kind = "block", id = 1 }
