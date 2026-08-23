@@ -40,9 +40,12 @@ end
 
 local VW, VH = 640, 576
 
+-- Centre of inventory CONTENT cell `i` (1-based) on the active tab.  The
+-- first grid slot is the tab's toolbar shortcut, so content starts at the
+-- second cell.
 local function inventoryCellCentre(i)
   local px, py = Inventory.rect(VW, VH)
-  local ci = i - 1
+  local ci = i
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
   return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
@@ -117,55 +120,133 @@ function test_objectCellLoadsCopyTool()
   local s = freshSession()
   local o = s:placeNewObject(1, 1)
   resetInput()
-  Input.inventory = { items = { { kind = "object", obj = o } }, tab = 2, scroll = 1 }
+  Input.inventory = { items = { { kind = "entity", entityType = "object", obj = o } }, tab = 2, scroll = 1 }
   local cx, cy = inventoryCellCentre(1)
   assert(Input.mousepressed(s, game, cx, cy, 1), "click on a saved object cell is consumed")
   local item = Input.hotbar[1]
-  assert(item and item.kind == "object" and item.obj == o,
-    "saved object cell loads a copy tool")
-  assert(s.selectedObject == o, "loading an object tool selects it")
+  assert(item and item.kind == "entity" and item.entityType == "object"
+    and item.obj == o, "saved object cell loads a copy tool")
+  assert(s.selectedItem == o, "loading an object tool selects it")
+end
+
+function test_creatorToolCellKeepsCreatePayload()
+  local s = freshSession()
+  resetInput()
+  -- This test places real entities on the SHARED map def; clear signs too
+  -- and restore them so nothing leaks into later tests.
+  local savedSigns = s.def.signs
+  s.def.signs = {}
+  -- A creator-made NPC tool stored by CREATE carries a `create` spec and no
+  -- live obj; loading it must keep the spec intact (rebuilding it as a copy
+  -- tool drops the payload and nothing can be placed).
+  local spriteId = next(data.sprites)
+  Input.inventory = { items = {
+    { kind = "entity", entityType = "object",
+      create = { objectType = "npc", sprite = spriteId,
+                 movement = "STAY", range = "DOWN", label = "Cloner" } },
+    { kind = "entity", entityType = "sign",
+      create = { text = "...", label = "Signpost" } },
+  }, tab = 2, scroll = 1 }
+  local cx, cy = inventoryCellCentre(1)
+  assert(Input.mousepressed(s, game, cx, cy, 1), "creator cell click is consumed")
+  local npcTool = Input.hotbar[1]
+  assert(npcTool and npcTool.create and npcTool.create.objectType == "npc",
+    "loading a creator NPC tool keeps its create spec")
+  assert(s:placeObjectSpec(2, 2, npcTool.create),
+    "the loaded create spec places an NPC")
+  -- The sign creator tool loads the same way (into the second slot).
+  Input.selected = 2
+  Input.inventory = { items = {
+    { kind = "entity", entityType = "sign",
+      create = { text = "...", label = "Signpost" } },
+  }, tab = 2, scroll = 1 }
+  local sx, sy = inventoryCellCentre(1)
+  assert(Input.mousepressed(s, game, sx, sy, 1), "creator sign cell click is consumed")
+  local signTool = Input.hotbar[2]
+  assert(signTool and signTool.create and signTool.entityType == "sign",
+    "loading a creator sign tool keeps its create spec")
+  assert(s:placeSignSpec(3, 3, signTool.create),
+    "the loaded create spec places a sign")
+  -- Leave no entities behind on the shared def.
+  s.def.objects = {}
+  s.def.signs = savedSigns
 end
 
 function test_objectTemplateCellLoadsNewTool()
   local s = freshSession()
   resetInput()
-  Input.inventory = { items = { { kind = "object", newObject = true } }, tab = 2, scroll = 1 }
+  -- Templates are gone; each tab leads with its own toolbar shortcut and
+  -- nothing arms a tool.
+  Input.inventory = { items = {}, tab = 2, scroll = 1 }
+  -- The tab's shortcut cell (first grid slot; centre of content index 0).
+  local sx, sy = inventoryCellCentre(0)
+  assert(Input.mousepressed(s, game, sx, sy, 1), "shortcut click is consumed")
+  assert(Input.hotbar[1] == nil, "shortcut cell arms no tool")
+  -- An empty content cell arms nothing either.
   local cx, cy = inventoryCellCentre(1)
-  assert(Input.mousepressed(s, game, cx, cy, 1),
-    "click on the saved new-object template is consumed")
-  local item = Input.hotbar[1]
-  assert(item and item.kind == "object" and item.newObject,
-    "template cell arms the new-object tool")
+  assert(Input.mousepressed(s, game, cx, cy, 1), "empty cell click is consumed")
+  assert(Input.hotbar[1] == nil, "empty content cell arms no tool")
 end
 
 function test_inventoryRmbOnObjectOpensDetails()
   local s = freshSession()
   local o = s:placeNewObject(1, 1)
   resetInput()
-  Input.inventory = { items = { { kind = "object", obj = o } }, tab = 2, scroll = 1 }
+  Input.inventory = { items = { { kind = "entity", entityType = "object", obj = o } }, tab = 2, scroll = 1 }
   local cx, cy = inventoryCellCentre(1)
   assert(Input.mousepressed(s, game, cx, cy, 2), "RMB on an object cell is consumed")
-  assert(Input.details and Input.details.object == o, "RMB opens Details for the object")
+  assert(Input.details and Input.details.target and Input.details.target.entity == o, "RMB opens Details for the object")
 end
 
 function test_detailsObjectBuildFields()
   local s = freshSession()
   local o = s:placeNewObject(2, 3)
-  Input.openDetails(s, { object = o })
+  Input.openDetails(s, { entity = o, entityType = "object" })
   local d = Input.details
   local keys, types = {}, {}
   for _, f in ipairs(d.fields) do keys[#keys + 1] = f.key; types[f.key] = f.type end
   assert(keys[1] == "type" and types.type == "readonly", "Type row is readonly")
   assert(keys[2] == "name" and types.name == "text", "Name row is editable")
-  assert(keys[3] == "pos" and types.pos == "readonly", "Pos row is readonly")
-  assert(keys[4] == "delete" and types.delete == "action", "DELETE action row")
+  assert(keys[3] == "movement" and types.movement == "choice",
+    "Walks row is a choice")
+  assert(keys[4] == "range" and types.range == "choice",
+    "Facing row is a choice")
+  assert(keys[5] == "text" and types.text == "text", "Dialog row is editable")
+  assert(keys[6] == "pos" and types.pos == "readonly", "Pos row is readonly")
+  assert(keys[7] == "delete" and types.delete == "action", "DELETE action row")
+  -- Choice vocabularies ride on the rows.
+  for _, f in ipairs(d.fields) do
+    if f.type == "choice" then
+      assert(f.choices and #f.choices > 0, "choice row carries its vocabulary")
+    end
+  end
+end
+
+function test_detailsObjectChoiceCycling()
+  local s = freshSession()
+  local o = s:placeNewObject(1, 1)
+  Input.openDetails(s, { entity = o, entityType = "object" })
+  local d = Input.details
+  -- Row 3 is movement; cycle forward STAY -> WALK.
+  d.index = 3
+  Input.keypressed(s, "right")
+  assert(o.movement == "WALK", "cycling right switches movement to WALK")
+  assert(o.range == "ANY_DIR", "switching movement coerces the range")
+  -- The rebuilt fields keep a choice on the range row with WALK vocabulary.
+  assert(d.fields[d.index].key == "movement", "row stays selected after rebuild")
+  assert(#d.fields[4].choices == 3, "range vocabulary follows the movement")
+  -- Cycle back left twice wraps to STAY.
+  Input.keypressed(s, "left")
+  Input.keypressed(s, "left")
+  assert(o.movement == "STAY", "cycling wraps around to STAY")
+  assert(o.range == "DOWN", "wrapping back re-coerces the range")
 end
 
 function test_detailsObjectKeyboardDelete()
   local s = freshSession()
   local o = s:placeNewObject(1, 1)
-  Input.openDetails(s, { object = o })
-  assert(Input.details and Input.details.object == o, "object details open")
+  Input.openDetails(s, { entity = o, entityType = "object" })
+  assert(Input.details and Input.details.entity == o, "object details open")
   assert(Input.keypressed(s, "x"), "X deletes the target")
   assert(#s.def.objects == 0, "object removed from the map")
   assert(Input.details == nil, "Details closes after delete")
@@ -174,10 +255,10 @@ end
 function test_detailsObjectDeleteByMouseClick()
   local s = freshSession()
   local o = s:placeNewObject(1, 1)
-  Input.openDetails(s, { object = o })
+  Input.openDetails(s, { entity = o, entityType = "object" })
   Input.details.index = 1
   local n = #Input.details.fields
-  assert(n == 4, "object details lists 4 rows")
+  assert(n == 7, "object details lists 7 rows")
   local px, py, pw, ph = Details.rect(VW, VH)
   local rowY = py + Panel.PAD + 20
   local delY = rowY + (n - 1) * (Panel.ROW_H + 6)
@@ -187,7 +268,7 @@ function test_detailsObjectDeleteByMouseClick()
   assert(Input.details == nil, "Details closes after the click-delete")
   -- A click on a non-action row must NOT delete.
   s:placeNewObject(3, 3)
-  Input.openDetails(s, { object = s.def.objects[1] })
+  Input.openDetails(s, { entity = s.def.objects[1], entityType = "object" })
   assert(Input.mousepressed(s, game, px + pw / 2, rowY, 1),
     "click on the first row is consumed")
   assert(#s.def.objects == 1, "clicking a text/readonly row does not delete")
@@ -196,7 +277,7 @@ end
 function test_detailsObjectKeyboardEditName()
   local s = freshSession()
   local o = s:placeNewObject(1, 1)
-  Input.openDetails(s, { object = o })
+  Input.openDetails(s, { entity = o, entityType = "object" })
   local d = Input.details
   d.index = 2 -- Name
   assert(Input.keypressed(s, "return"), "Enter starts the text edit")
@@ -222,7 +303,7 @@ end
 function test_detailsWarpDeleteByMouseClick()
   local s = freshSession()
   local w = s:placeWarp(1, 1)
-  Input.openDetails(s, { warp = w })
+  Input.openDetails(s, { entity = w, entityType = "warp" })
   local n = #Input.details.fields
   assert(n == 5, "warp details lists 5 rows")
   local px, py, pw, ph = Details.rect(VW, VH)
@@ -238,7 +319,8 @@ function test_objectToolClearsBlockBrush()
   resetInput()
   Input.hotbar[1] = { kind = "block", id = 3 }
   Input.applySelection(s)
-  Input.hotbar[1] = { kind = "object", obj = { x = 0, y = 0, object_type = "NPC", sprite = "LASS" } }
+  Input.hotbar[1] = { kind = "entity", entityType = "object",
+    obj = { x = 0, y = 0, object_type = "NPC", sprite = "LASS" } }
   Input.applySelection(s)
   assert(s.selectedSprite == nil and s.selectedBlock == nil,
     "an object tool must not map to a block/sprite brush")
@@ -258,14 +340,16 @@ end
 function test_undoRedoObjectViaKeyboard()
   local s = freshSession()
   resetInput()
-  Input.hotbar[1] = { kind = "object", newObject = true }
+  -- A creator-built NPC tool (create payload), like the F factory produces.
+  local sprite = assert(next(data.sprites), "fixture data has sprites")
+  Input.hotbar[1] = { kind = "entity", entityType = "object",
+    create = { objectType = "npc", sprite = sprite } }
   Input.selected = 1
   local restore = stubTransform()
   Input.reset()
-  assert(Input.paintAt(s, 16 * 4 + 8, 16 * 5 + 8), "template paint succeeds")
+  assert(Input.paintAt(s, 16 * 4 + 8, 16 * 5 + 8), "object tool paint succeeds")
   restore()
   assert(#s.def.objects == 1, "one object placed")
-  Input.closeDetails() -- placing opens the Details panel; it must not eat Ctrl+Z
   local orig = _G.love.keyboard.isDown
   _G.love.keyboard.isDown = function() return true end
   assert(Input.keypressed(s, "z"), "Ctrl+Z triggers undo")
@@ -322,6 +406,7 @@ return {
     "test_objectName",
     "test_moveAndRemoveObject",
     "test_objectCellLoadsCopyTool",
+    "test_creatorToolCellKeepsCreatePayload",
     "test_objectTemplateCellLoadsNewTool",
     "test_inventoryRmbOnObjectOpensDetails",
     "test_detailsObjectBuildFields",

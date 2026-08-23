@@ -93,28 +93,21 @@ function Hotbar.apply(ui, session)
 end
 
 -- Loads an inventory cell into the selected hotbar slot.  A live entity
--- cell arms the copy tool for that entry (plus the fresh-NPC / new-warp / new-sign
--- templates); everything else loads as-is.
+-- cell arms the copy tool for that entry; a creator tool carries its own
+-- `create` spec and loads as-is (its payload IS the placement data --
+-- rebuilding it as a copy tool would drop the spec and place nothing).
 function Hotbar.loadItem(ui, session, item)
   if not item then return end
-  if item.kind == "entity" then
+  if item.kind == "entity" and not item.create then
     local et = item.entityType
     if et == "warp" then
-      if item.newWarp then
-        ui.hotbar[ui.selected] = { kind = "entity", entityType = "warp", newWarp = true }
-      else
-        ui.hotbar[ui.selected] =
-          { kind = "entity", entityType = "warp", destMap = item.destMap, destWarp = item.destWarp,
-            warp = item.warp }
-        session.selectedItem = item.warp
-      end
+      ui.hotbar[ui.selected] =
+        { kind = "entity", entityType = "warp", destMap = item.destMap, destWarp = item.destWarp,
+          warp = item.warp }
+      session.selectedItem = item.warp
     elseif et == "object" then
-      if item.newObject then
-        ui.hotbar[ui.selected] = { kind = "entity", entityType = "object", newObject = true }
-      else
-        ui.hotbar[ui.selected] = { kind = "entity", entityType = "object", obj = item.obj }
-        session.selectedItem = item.obj
-      end
+      ui.hotbar[ui.selected] = { kind = "entity", entityType = "object", obj = item.obj }
+      session.selectedItem = item.obj
     elseif et == "sign" then
       ui.hotbar[ui.selected] = { kind = "entity", entityType = "sign", sign = item.sign }
       session.selectedItem = item.sign
