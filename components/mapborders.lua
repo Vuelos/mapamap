@@ -110,6 +110,37 @@ local function drawConnection(
     w = d
   end
 
+  if t.kind == "voxel" then
+    -- Perspective ground: project the marker's four corners instead of
+    -- building a screen-space rectangle from two of them.
+    local poly = { Coords.blockPoly(t, x0 / 16, y0 / 16, w / 16, h / 16) }
+    if not poly[1] then return end
+    love.graphics.setColor(1, 1, 1, 0.92)
+    love.graphics.polygon("fill", poly)
+    local col = isExtra and EXTRA or PRIMARY
+    love.graphics.setColor(col[1], col[2], col[3], 0.5)
+    love.graphics.setLineWidth(1)
+    love.graphics.polygon("line", poly)
+
+    local destDef = session.data.maps[conn.map]
+                    or session.data.maps[tostring(conn.map)]
+                    or session.data.maps[conn.mapId]
+                    or session.data.maps[tostring(conn.mapId)]
+
+    local name = (destDef and destDef.name)
+              or tostring(conn.map or conn.mapId or "?")
+
+    drawLabelCentered(
+      session.font,
+      name,
+      (poly[1] + poly[5]) / 2,
+      (poly[2] + poly[6]) / 2,
+      (dir == "west" or dir == "east"),
+      nil
+    )
+    return
+  end
+
   local sx0, sy0 = Coords.toScreen(t, x0, y0)
   local sx1, sy1 = Coords.toScreen(t, x0 + w, y0 + h)
   if not sx0 or not sx1 then return end
@@ -174,19 +205,44 @@ function Borders.draw(session, game)
     local bx, by, bw, bh = r.x, r.y, r.w, r.h
     local worldX, worldY = bx * Common.BLOCK_PX, by * Common.BLOCK_PX
     local worldW, worldH = bw * Common.BLOCK_PX, bh * Common.BLOCK_PX
-    local sx1, sy1 = Coords.toScreen(t, worldX, worldY)
-    local sx2, sy2 = Coords.toScreen(t, worldX + worldW, worldY + worldH)
-    if sx1 and sx2 then
-      local rectX, rectY = sx1, sy1
-      local rectW, rectH = sx2 - sx1, sy2 - sy1
+
+    -- Outline corners + label anchor; the voxel path projects all four map
+    -- corners so the outline follows the perspective ground.
+    local rectX, rectY, rectW, rectH
+    local poly
+    if t.kind == "voxel" then
+      poly = { Coords.blockPoly(t, bx * 2, by * 2, bw * 2, bh * 2) }
+      if not poly[1] then
+        rectX = nil
+      else
+        rectX = (poly[1] + poly[3] + poly[5] + poly[7]) / 4
+        rectY = (poly[2] + poly[4] + poly[6] + poly[8]) / 4
+      end
+    else
+      local sx1, sy1 = Coords.toScreen(t, worldX, worldY)
+      local sx2, sy2 = Coords.toScreen(t, worldX + worldW, worldY + worldH)
+      if sx1 and sx2 then
+        rectX, rectY = sx1, sy1
+        rectW, rectH = sx2 - sx1, sy2 - sy1
+      end
+    end
+    if rectX then
       local isCurrent = r.id == session.mapId
       local col = isCurrent and YELLOW or GREEN
       -- Faint fill + bright outline, echoing map_editor's edge silhouette.
       love.graphics.setColor(col[1], col[2], col[3], isCurrent and 0.12 or 0.1)
-      love.graphics.rectangle("fill", rectX, rectY, rectW, rectH)
+      if poly then
+        love.graphics.polygon("fill", poly)
+      else
+        love.graphics.rectangle("fill", rectX, rectY, rectW, rectH)
+      end
       love.graphics.setColor(col[1], col[2], col[3], isCurrent and 0.95 or 0.8)
       love.graphics.setLineWidth(isCurrent and 2 or 1)
-      love.graphics.rectangle("line", rectX, rectY, rectW, rectH)
+      if poly then
+        love.graphics.polygon("line", poly)
+      else
+        love.graphics.rectangle("line", rectX, rectY, rectW, rectH)
+      end
 
       -- Connection bands on every side (primary slots + editor-only extras).
       local def = r.def
@@ -245,8 +301,13 @@ function Borders.draw(session, game)
       -- Map name tag (complete, white chip for contrast), centered on the map.
       local name = (def and def.name) or tostring(r.id)
       local tw = (session.font.width and session.font.width(name)) or (#name * 8)
-      local lx = rectX + rectW / 2 - tw / 2
-      local ly = rectY + rectH / 2 - 4
+      local lx, ly
+      if poly then
+        -- rectX/rectY carry the projected corner centroid here.
+        lx, ly = rectX - tw / 2, rectY - 4
+      else
+        lx, ly = rectX + rectW / 2 - tw / 2, rectY + rectH / 2 - 4
+      end
       Text.label(session.font, name, lx, ly, 1, { bg = WHITE_BG, padX = 2, padY = 1 })
     end
   end

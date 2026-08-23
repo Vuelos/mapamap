@@ -19,6 +19,7 @@ local Input = require("mods.mapamap.controllers.input")
 local Overlay = require("mods.mapamap.components.overlay")
 local SessionManager = require("mods.mapamap.controllers.session_manager")
 local Gen = require("mods.mapamap.engine.gen")
+local Bridge = require("mods.mapamap.engine.dramaless_bridge")
 
 -- Safe xpcall error handler: the game's mod sandbox strips `debug`, so a bare
 -- `debug.traceback` (evaluated as the 2nd arg to xpcall) raises "attempt to
@@ -48,6 +49,7 @@ local function logCrash(mod, where, err)
 end
 
 local function run(mod)
+  Bridge.init(mod)
   -- Hooks run as (next, game, viewport); draw our overlay and continue the
   -- chain so lower-priority mods and the vanilla no-op still run.
   local firstDrawLogged = false
@@ -59,11 +61,20 @@ local function run(mod)
       end
       SessionManager.reconcile(game)
       local session = SessionManager.session
-      local ok, err = xpcall(function()
-        Overlay.draw(session, game, viewport)
-        WorldAdapter.flushLiveRebuild(session)
-      end, tb)
-      if not ok then logCrash(mod, "render.hud", err) end
+      -- The overlay draws over whichever pipeline rendered the world this
+      -- frame.  Under DRAMALESS_SHAPE's voxel pass Coords hands back a
+      -- perspective transform (engine/coords.lua), so painting works through
+      -- the 3D view exactly like the flat one; other mod pipelines still gate
+      -- editing off inside Coords (transform nil -> world draws no-op).
+      do
+        local ok, err = xpcall(function()
+          Overlay.draw(session, game, viewport)
+        end, tb)
+        if not ok then logCrash(mod, "render.hud", err) end
+      end
+      -- Deferred live rebakes are canvas work for the FLAT path; flush them
+      -- regardless of which pipeline drew this frame.
+      WorldAdapter.flushLiveRebuild(session)
       -- The vanilla world render runs after the overlay.  If it raises (Lua or
       -- otherwise), Hooks:call re-raises it to the engine and the game hard
       -- stops with no message.  Catch + log it here so a vanilla-render failure
