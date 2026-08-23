@@ -6,7 +6,8 @@
 --   { kind = "item", id = <string> }                   pickable map item (data.items id)
 --   { kind = "blueprint", id, w, h, tiles }            captured block grid
 --   { kind = "entity", entityType = "warp"|"object"|"sign",
---           newWarp | newObject | newSign, warp|obj|sign }  entity tool / template
+--           newWarp | newObject | newSign legacy template flags are dropped
+--           on load; entity tools carry warp|obj|sign or a create payload }
 -- Blocks are drawn straight from the map renderer's tile atlas (or the owning
 -- tileset's bundle when they came from a foreign tileset); sprites from a
 -- lazily-built SpriteRenderer; blueprints from the renderer quads scaled to
@@ -159,8 +160,12 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
     if not session._spriteRenderers[item.id] then
       local def = session.data and session.data.sprites[item.id]
       if def then
-        session._spriteRenderers[item.id] =
-          require("src.render.SpriteRenderer").new(def, "mapamap_" .. item.id)
+        local sr = require("src.render.SpriteRenderer").new(def,
+          "mapamap_" .. item.id)
+        -- Gen 2 color mode: tint from the live palette data so thumbnails
+        -- are not DMG gray (no-op on Gen 1 / headless).
+        require("mods.mapamap.engine.gen").applySpritePalette(session, sr, def)
+        session._spriteRenderers[item.id] = sr
       end
     end
     local sr = session._spriteRenderers[item.id]
@@ -186,47 +191,27 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
   if item.kind == "entity" then
     local et = item.entityType
     if et == "warp" then
-      if item.newWarp then
-        love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
-        love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-        love.graphics.setColor(1, 1, 1, 0.9 * A)
-        love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
-          x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
-        love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
-          x + boxSize / 2, y + boxSize / 2 + boxSize / 6)
-      else
-        love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
-        love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-        love.graphics.setColor(1, 1, 1, 0.85 * A)
-        love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-      end
+      love.graphics.setColor(0.2, 0.6, 1, 0.7 * A)
+      love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
+      love.graphics.setColor(1, 1, 1, 0.85 * A)
+      love.graphics.circle("line", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
       love.graphics.setColor(1, 1, 1, A)
       local destLabel = item.destMap
         or (item.create and item.create.destMap) or nil
-      if session.font and item.newWarp then
-        session.font.draw("NEW", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
-      elseif session.font and destLabel then
+      if session.font and destLabel then
         session.font.draw(destLabel, x + 2, y + boxSize / 2 + boxSize / 3 + 2)
       end
       return true
     end
     if et == "object" then
-      if item.newObject then
-        love.graphics.setColor(0.2, 0.8, 0.35, 0.7 * A)
-        love.graphics.circle("fill", x + boxSize / 2, y + boxSize / 2, boxSize / 3)
-        love.graphics.setColor(1, 1, 1, 0.9 * A)
-        love.graphics.line(x + boxSize / 2 - boxSize / 6, y + boxSize / 2,
-          x + boxSize / 2 + boxSize / 6, y + boxSize / 2)
-        love.graphics.line(x + boxSize / 2, y + boxSize / 2 - boxSize / 6,
-          x + boxSize / 2, y + boxSize / 2 + boxSize / 6)
-        if session.font then
-          session.font.draw("NEW", x + 2, y + boxSize / 2 + boxSize / 3 + 2)
-        end
-        return true
-      end
-      -- A creator tool (create payload) previews the sprite it will place.
+      -- A creator tool (create payload) previews the sprite it will place;
+      -- item balls fall back to the poke-ball sheet like the placer does.
       local o = item.obj
       local spr = o and o.sprite or (item.create and item.create.sprite)
+      if not spr and ((item.create and item.create.objectType == "itemball")
+          or (o and o.object_type == "item")) then
+        spr = "SPRITE_POKE_BALL"
+      end
       if spr and session.data and session.data.sprites[spr] then
         return Item.draw(session, { kind = "sprite", id = spr }, x, y, boxSize, nil, A)
       end

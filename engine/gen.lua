@@ -22,6 +22,32 @@ function Gen.overworld(game)
   return game.overworld or game.world
 end
 
+-- Colors a thumbnail SpriteRenderer the way World:applySpritePalette colors
+-- live NPCs (Gen 2 only): the sheet's own palette under the world's current
+-- daytime, resolved from the live GbcPalette data.  Without this a freshly
+-- built renderer bakes DMG grays even in color mode.  Returns true when
+-- colors were applied; gen1 and headless/stub environments answer false.
+function Gen.applySpritePalette(session, sr, spriteDef)
+  if not (session and sr and spriteDef) then return false end
+  local ow = Gen.overworld(session.game)
+  if not (ow and ow.palettes) then return false end
+  local okP, Palettes = pcall(require, "src.world.gen2.Palettes")
+  if not okP then return false end
+  local okG, GbcPalette = pcall(require, "src.render.GbcPalette")
+  if not okG or not GbcPalette.available or not GbcPalette.available() then
+    return false
+  end
+  local mapDef = (ow.map and ow.map.def) or session.def
+  local daytime = ow.daytime or Palettes.daytimeFor(mapDef)
+  -- No object_event here (thumbnails are sheets, not placed NPCs), so like
+  -- the player the sheet's own palette decides.
+  local colors = Palettes.spritePalette(ow.palettes, daytime, spriteDef, nil)
+  if not colors then return false end
+  sr:setObjPalette(colors,
+    ("gen2:%s:%d"):format(tostring(daytime), spriteDef.paletteId or 0))
+  return true
+end
+
 -- Creates an editor-internal Map instance for the given map id.
 -- Gen 1: MapLoader.load builds a Map with a TileRenderer.
 -- Gen 2: gen2.Map.new builds a bare Map (no renderer; the World manages its
