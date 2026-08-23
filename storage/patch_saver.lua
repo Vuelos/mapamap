@@ -3,12 +3,14 @@
 -- system, and provides helpers for export and application.
 
 local Common = require("mods.mapamap.common")
+local Snapshot = require("mods.mapamap.domain.snapshot")
 local SaveSerializer = require("src.core.SaveSerializer")
+local Keys = require("mods.mapamap.storage.save_keys")
 local Save = {}
 
-local KEY = "mapamap_patches"
-local ENC_KEY = "mapamap_encounter_patches"
-local CONN_KEY = "mapamap_connection_patches"
+local KEY = Keys.PATCHES
+local ENC_KEY = Keys.ENCOUNTER_PATCHES
+local CONN_KEY = Keys.CONNECTION_PATCHES
 -- Bulk export/import target: a single file in a map_edits/ subfolder of
 -- the mod source, holding all three patch buckets at once.
 local EXPORT_REL = "map_edits/patches.lua"
@@ -55,6 +57,20 @@ function Save.updatePatchField(mod, mapId, key, value)
   patch[key] = value
   patches[mapId] = patch
   mod.save:set(KEY, patches)
+end
+
+-- The single diff-and-persist path: diffs `def` against its pre-edit snapshot
+-- `orig` and stores every changed field as its own patch entry.  No-op (returns
+-- false) when anything is missing or nothing changed.  Shared by
+-- SessionManager.saveMapPatches and WorldAdapter.reconcileSession.
+function Save.diffAndStore(mod, mapId, def, orig)
+  if not (mod and mapId and def and orig) then return false end
+  local patch = Snapshot.diff(def, orig)
+  if not next(patch) then return false end
+  for key, value in pairs(patch) do
+    Save.updatePatchField(mod, mapId, key, value)
+  end
+  return true
 end
 
 -- Removes the patch for the given mapId from the mod save data.

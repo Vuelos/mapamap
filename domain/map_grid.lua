@@ -25,6 +25,7 @@ local Neighbors = require("mods.mapamap.domain.neighbors")
 local NewMap = require("mods.mapamap.domain.new_map")
 local Common = require("mods.mapamap.common")
 local Connections = require("mods.mapamap.domain.connections")
+local Bridge = require("mods.mapamap.engine.dramaless_bridge")
 local BLOCK_PX = Common.BLOCK_PX
 local DIRS = Common.DIRS
 local RECIP = Common.RECIP

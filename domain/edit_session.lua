@@ -179,28 +179,6 @@ function EditSession:assertResolvable()
   return true
 end
 
--- Applies the mod's saved patches for the edited map to the live data.
-function EditSession:applySavedPatches()
-  local Save = require("mods.mapamap.storage.patch_saver")
-  local patch = Save.getPatches(self.mod)[self.mapId]
-  if not patch then return end
-  for key, value in pairs(patch) do
-    if key == "blocks" then
-      for i, v in ipairs(value) do
-        if self.def.blocks[i] ~= nil then self.def.blocks[i] = v end
-      end
-    elseif key ~= "id" then
-      self.def[key] = value
-    end
-  end
-  Graft.invalidateTileset(self.data, self.tileset.id)
-  Graft.materialize(self.data, self.tileset.id)
-  self._thumbBundles = {}
-  self:reloadGraftedRenderers()
-  self:rebuildNeighbors()
-  self:storeOriginal()
-end
-
 -- Imports a foreign tileset block into the edited map.
 function EditSession:importBlock(srcTileset, srcBlock)
   local id = Graft.importBlock(self.data, self.tileset.id, self.def,
@@ -323,20 +301,31 @@ function EditSession:cellInsideNeighbor(cellX, cellY)
   return false
 end
 
+-- Returns the warp, object, or sign occupying a walk-grid cell on the edited
+-- map plus its type tag ("object" | "warp" | "sign"), or nil.  Priority is
+-- object > warp > sign (the order every pick/erase chain used).  `exclude`
+-- skips one entity (move operations let an entity revisit its own cell).
+function EditSession:entityAt(cellX, cellY, exclude)
+  local def = self.def
+  local lists = {
+    { list = def.objects, type = "object" },
+    { list = def.warps,   type = "warp" },
+    { list = def.signs,   type = "sign" },
+  }
+  for _, l in ipairs(lists) do
+    for _, ent in ipairs(l.list or {}) do
+      if ent ~= exclude and (ent.x or -1) == cellX and (ent.y or -1) == cellY then
+        return ent, l.type
+      end
+    end
+  end
+  return nil
+end
+
 -- True when a warp, object, or sign already occupies this cell on the edited
--- map.  `exclude` is an optional entity table to skip (used by move operations
--- so an entity can return to its own cell).
+-- map.  `exclude` is an optional entity table to skip.
 function EditSession:cellOccupied(cellX, cellY, exclude)
-  for _, w in ipairs(self.def.warps or {}) do
-    if w ~= exclude and (w.x or -1) == cellX and (w.y or -1) == cellY then return true end
-  end
-  for _, o in ipairs(self.def.objects or {}) do
-    if o ~= exclude and (o.x or -1) == cellX and (o.y or -1) == cellY then return true end
-  end
-  for _, s in ipairs(self.def.signs or {}) do
-    if s ~= exclude and (s.x or -1) == cellX and (s.y or -1) == cellY then return true end
-  end
-  return false
+  return self:entityAt(cellX, cellY, exclude) ~= nil
 end
 
 return EditSession

@@ -2,7 +2,6 @@
 -- Handles canvas cache dropping, live NPC pool refreshes, atlas/renderer rebuilds.
 -- The EditSession delegates system side-effects to this adapter.
 
-local Common = require("mods.mapamap.common")
 local Gen = require("mods.mapamap.engine.gen")
 local Graft = require("mods.mapamap.engine.graft")
 
@@ -140,6 +139,7 @@ end
 
 -- Rebuilds the overworld's live NPC list for the current map from def.objects.
 function WorldAdapter.refreshObjects(session)
+  WorldAdapter.registerTalkTexts(session)
   local ow = session.game and Gen.overworld(session.game)
   if not (ow and ow.map and ow.map.id == session.mapId) then return false end
   local fn = ow.pooledNPC
@@ -235,8 +235,47 @@ function WorldAdapter.reloadGraftedRenderers(session)
   WorldAdapter.refreshLiveRenderers(session)
 end
 
+-- Registers Lua talk handlers so editor entities carrying CUSTOM (raw string)
+-- texts actually speak in-game on Gen 1: showMapText resolves only TEXT_*
+-- constants through data.text_pointers, so a raw string just warns "no text"
+-- without this bridge.  Handlers are keyed by the raw string and read the LIVE
+-- entity's text at talk time, so later Details edits apply without
+-- re-registration; stale keys after a deletion are unreferenced and harmless.
+-- TEXT_*-prefixed strings stay engine-resolved (the handler would otherwise
+-- shadow the real constant with its literal), and item balls keep their pickup
+-- script (talkTo dispatches talk handlers before the ball logic).  Gen 2 talks
+-- run through the VM scriptKey pipeline -- skipped there.
+function WorldAdapter.registerTalkTexts(session)
+  if Gen.isGen2() then return end
+  local ok, MapScripts = pcall(require, "src.script.MapScripts")
+  if not ok or not MapScripts or not session.def then return end
+  local function hasItem(ent)
+    return ent.item ~= nil and ent.item ~= "0" and ent.item ~= 0
+  end
+  local talk, n = {}, 0
+  local function add(ent)
+    local text = ent and ent.text
+    if type(text) ~= "string" or text == "" or text:sub(1, 5) == "TEXT_" then
+      return
+    end
+    if hasItem(ent) then return end
+    -- Reads the talked-to NPC's LIVE def text so Details edits apply without
+    -- re-registration; signs pass npc = nil and fall back to the keyed text.
+    talk[text] = function(game, _ow, npc, done)
+      local TextBox = require("src.render.TextBox")
+      local live = npc and npc.def and npc.def.text or text
+      game.stack:push(TextBox.new(game, live, done))
+    end
+    n = n + 1
+  end
+  for _, o in ipairs(session.def.objects or {}) do add(o) end
+  for _, s in ipairs(session.def.signs or {}) do add(s) end
+  if n > 0 then MapScripts.attachBase(session.mapId, { talk = talk }) end
+end
+
 -- Applies saved patches and materializes grafts.
 function WorldAdapter.applySavedPatches(session)
+  WorldAdapter.registerTalkTexts(session)
   local Save = require("mods.mapamap.storage.patch_saver")
   local patch = Save.getPatches(session.mod)[session.mapId]
   if not patch then return end
@@ -257,34 +296,16 @@ function WorldAdapter.applySavedPatches(session)
   session:storeOriginal()
 end
 
--- Creates an adjacent map and switches the session onto it.
+-- Creates an adjacent map and switches the session onto it.  The creation is
+-- engine-side (wires reciprocal connections into live data); every session
+-- re-pointing step (dirty-bookkeeping, undo reset, renderer reload) lives in
+-- EditSession:adoptNewMap so there is exactly one adoption implementation.
 function WorldAdapter.createAdjacentMap(session, side)
-  local fromId = session.mapId
   local NewMap = require("mods.mapamap.domain.new_map")
   local newId = NewMap.createConnectedMap(session, side)
   if not newId then return end
-  session._sessionOriginals[fromId] = session._originalSnapshot
-  session._sessionEncounters[fromId] = session.originalEncounters
-  session._sessionDirty[fromId] = true
-  session._newMaps = session._newMaps or {}
-  session._newMaps[newId] = Common.deepCopy(session.data.maps[newId])
-  session:rebuildNeighbors()
+  session:adoptNewMap(newId)
   WorldAdapter.rebuildRuntimeNeighbors(session)
-  local data = session.data
-  local newDef = data.maps[newId]
-  local tileset = data.tilesets[newDef.tileset]
-  local m = Gen.loadMap(data, newId)
-  session.mapId = newId
-  session.def = newDef
-  session.tileset = tileset
-  session.map = m
-  session.mapW = newDef.width * Common.BLOCK_PX
-  session.mapH = newDef.height * Common.BLOCK_PX
-  session.undo = require("mods.mapamap.domain.undo").new()
-  session.expandShiftL = 0
-  session.expandShiftT = 0
-  session:rebuildNeighbors()
-  session:storeOriginal()
 end
 
 -- Reconciles the session when the player walks across map borders.
@@ -295,14 +316,9 @@ function WorldAdapter.reconcileSession(session, game)
 
   -- Save patches for the outgoing map
   local Save = require("mods.mapamap.storage.patch_saver")
-  local patches = Save.getPatches(session.mod)
-  if session.mapChanged and session._originalSnapshot then
-    local patch = require("mods.mapamap.domain.snapshot").diff(session.def, session._originalSnapshot)
-    if next(patch) then
-      for key, value in pairs(patch) do
-        Save.updatePatchField(session.mod, session.mapId, key, value)
-      end
-    end
+  if session.mapChanged then
+    Save.diffAndStore(session.mod, session.mapId, session.def,
+      session._originalSnapshot)
   end
 
   -- Open fresh session on the incoming map
