@@ -18,22 +18,27 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 
 | Module             | Responsibility                                                            |
 | ------------------ | ------------------------------------------------------------------------- |
-| `main.lua`         | F6 toggle, hook/wrap registration, auto-save on close, patch replay, `MapGrid.autofill` on open/load |
-| `session.lua`      | Editor state; mixes in `func/map_ops`, `func/editor_neighbors`, `func/warps`; warp/object placement helpers, `paintedBlocks`, `createMapAtCursor` (paint-time void creation) |
-| `func/map_grid.lua`| Load-time grid expansion (`autofill`) + paint-time void creation (`createForBlocks`/`createForPaint`): BFS layout, open-void candidates, `createMap` (reciprocal flush wiring) |
-| `input.lua`        | Pure input dispatch (press/release/move/wheel/key) + the Input controller table; every operation delegates to a focused module below |
-| `func/coords.lua`  | Screen <-> world mapping through the live camera + fit-scale/zoom         |
-| `func/state.lua`   | UI controller lifecycle: hotbar configure/serialize, reset, per-map re-pointing, hotbar/inventory save/load |
-| `func/blueprints.lua`| Rectangle-select capture (R) and blueprint stamping                        |
-| `func/paint.lua`   | Paint/erase/pick/dest-pick world operations through the session's MapOps; triggers paint-time map creation on void |
+| `main.lua`         | F6 toggle, hook/wrap registration; all session work delegated to `controllers/session_manager.lua` |
+| `controllers/session_manager.lua` | Session lifecycle: `open`/`close`, `autoSave`/persist (diff patches + whole new maps + hotbar/inventory), `reconcile` on map-border walk, grid expansion (`MapGrid.autofill`) on open/entry, `createAdjacentMap`, `replayPatches` on save.loaded |
+| `controllers/editor_tools.lua` | Brush/tool drag state (paint/erase arms, dedupe anchors, entity-drag ghost, void-stroke buffer) + `apply`/`erase`/`commitVoidStroke` routing into `domain/paint.lua`; single owner of the `brush` table passed to Paint |
+| `domain/edit_session.lua` | Editor state; mixes in `domain/map_ops`, `domain/editor_neighbors`, `domain/warps`; warp/object placement helpers, `paintedBlocks`, `createMapAtCursor` (paint-time void creation) |
+| `domain/map_grid.lua`| Load-time grid expansion (`autofill`) + paint-time void creation (`createForBlocks`/`createForPaint`): BFS layout, open-void candidates, `createMap` (reciprocal flush wiring) |
+| `controllers/input.lua` | Pure input dispatch (press/release/move/wheel/key) + the Input controller table; brush state reads/writes delegated to `controllers/editor_tools.lua`, every operation delegates to a focused module below |
+| `engine/coords.lua` | Screen <-> world mapping through the live camera + fit-scale/zoom         |
+| `storage/config.lua`| UI controller lifecycle: hotbar configure/serialize, reset, per-map re-pointing, hotbar/inventory save/load |
+| `domain/blueprints.lua`| Rectangle-select capture (R) and blueprint stamping                        |
+| `domain/brushes.lua` | Terrain brush model: 20 optional slot positions (core 3x3, inner corners, v/h corridors, borderless line runs ln/ls/lw/le, isolated o), join-mask `pickKey` with fallback chains toward the required center, block membership (native/grafted/verbatim) |
+| `domain/paint.lua` | Paint/erase/pick/dest-pick world operations through the session's MapOps; triggers paint-time map creation on void; routes `kind = "brush"` items to `MapOps.paintBrush` |
 | `components/overlay.lua`| Draws cursor highlight, a translucent blueprint placement preview (ghost stamp + green footprint outline replacing the plain cursor while a blueprint is selected), blueprint rect, warp circles for every map laid out around the one being rendered (root + neighbors, each at its world offset), dest-pick crosshair, hotbar, inventory, tileset picker, Details panel via `render.hud`; world markers draw first so panels always render above them, and a picked-up item (hotbar/picker drag) floats above everything faded. Warps are enumerated in the RUNTIME's frame (`ow.map` + `ow.neighbors` strip offsets, falling back to the session) so circles stay glued to their tiles across a border cross instead of floating in the stale session anchor |
 | `components/hotbar.lua`| Centered square 10-slot hotbar geometry + draw + selection model (tag/selected/apply/loadItem) |
 | `components/picker.lua`| Tileset picker panel: catalog (Items & NPCs first), dropdown, grid, draw |
-| `components/inventory.lua`| Persistent left panel with category tabs (Tiles/Objects/Warps/Blueprints); each tab's grid is split by a labelled divider — the CURRENT MAP's live content on top (Tiles: unique painted blocks, Objects: live `def.objects`, Warps: live `def.warps`, each with a trailing template cell) and the stored collection below (`tabList` / `paintedBlocks`); also the collection model (add/list) |
-| `components/item.lua`  | Shared slot thumbnail renderer (blocks, sprites, items, blueprints, warps, objects)   |
+| `components/inventory.lua`| Persistent left panel with category tabs (Tiles/Entities/Blueprints/Brushes); each tab's FIRST grid cell is that tab's own toolbar shortcut ([E] tileset picker, [F] entity factory, [R] blueprint rect-select, [M] Brush Maker; letters draw in caps) and the rest of the grid lists only the stored collection (`tabFor` / `listFor`); adds from hotbar drops file the item silently onto its respective tab, creator/blueprint saves jump to theirs; also the collection model (add/list) |
+| `components/item.lua`  | Shared slot thumbnail renderer (blocks, sprites, items, blueprints, warps, objects, brushes)   |
+| `components/brush_editor.lua` | Brush Maker panel (toolbar `M`): spatial two-layout slot grid — a 5x5 main grid (core 3x3 centered, inner corners on the panel corners) over a complete 5x5 line cross (borderless runs ln/ls/lw/le at the arm tips, v/h corridors inner on their axes, isolated o at the cross center; nonexistent join positions render as dim placeholders); tiles are dragged/clicked in from the hotbar/picker/inventory, RMB clears a slot, SAVE stores `{ kind = "brush" }` in the inventory's Brushes tab; RMB on a saved brush cell loads it back into the maker |
 | `components/details.lua`| Modal Details panel for warps + objects + inventory items (Pos/Dest/name/label, nudge, DELETE via keyboard or click); open/close/keyboard model |
-| `func/*.lua`       | Reused data operations from `map_editor` (diff, undo, neighbors, save)     |
-| `func/warps.lua`   | Warp editing operations (place, move, remove, connect, label) mixed into Session |
+| `domain/` `engine/` `storage/` | Reused data operations from `map_editor` split by concern: `domain/*` pure data/state mutators, `engine/*` game & LÖVE bridges (gen, graft, coords, world_adapter), `storage/*` persistence (patch_saver, config) |
+| `domain/warps.lua` | Warp editing operations (place, move, remove, connect, label) mixed into Session |
+| `engine/world_adapter.lua` | Engine/rendering bridge: Gen 1 renderer rebuilds, Gen 2 canvas drop/re-bake, live NPC pool sync, `applySavedPatches`, `createAdjacentMap`, `reconcileSession` |
 
 ### Control map (while the overlay is open)
 
@@ -52,11 +57,15 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 | Drag picker item to slot     | LMB-drag from panel onto a hotbar slot  |
 | Drag a hotbar item           | LMB-drag a slot onto another slot (swap) or onto the inventory (copy) |
 | Blueprint placement preview  | With a blueprint in the active slot, a translucent ghost stamp + green footprint shows exactly where the next LMB places |
-| Toggle rectangle-select      | `R` (drag to grab a block area)         |
-| Open Blueprints tab          | `B`                                     |
+| Toggle rectangle-select      | `R` (drag or click two corners; captures the area into the Blueprints tab) |
 | Stamp a blueprint            | Load it into a slot, then LMB paint     |
-| Place a warp                 | Load a Warps-tab cell (or the New Warp template) into a slot, then LMB paint. The template places exactly ONE self-destined warp (no return pair) |
-| Place / copy an object       | Objects-tab live cell loads a copy tool; the New Object template creates a fresh NPC; both paint with LMB (1x1 cell) |
+| Open Brush Maker             | `M` (or the toolbar M button); hides with the inventory |
+| Fill a brush slot            | Drag a tile in, or click the slot with a tile on the hotbar; RMB clears a slot; click a filled slot with nothing selected grabs its tile |
+| Save / clear / delete        | SAVE (needs only the center tile) stores it in the Brushes tab — updating the loaded brush in place when it was RMB-loaded; CLEAR empties every slot; DELETE removes the loaded brush from the inventory (draft keeps its slots) |
+| Paint a terrain brush        | Load a saved brush into a slot, then LMB paint — each cell picks its tile from the join mask and surrounding brush cells re-blend |
+| Edit a saved brush           | RMB a Brushes-tab cell loads it into the maker |
+| Place a warp                 | Load an Entities-tab cell (or build one in the factory) into a slot, then LMB paint. The New Warp template places exactly ONE self-destined warp (no return pair) |
+| Place / copy an object       | Entities-tab cells load copy tools; the entity factory ([F]) configures fresh NPCs / items / battlers / mons and CREATE arms the hotbar slot; both paint with LMB (1x1 cell). Creator tools keep their `create` spec when re-loaded from the inventory |
 | Move a warp                  | Right-drag a warp to its new cell       |
 | Graphical dest pick          | `C`, then click the destination on the world     |
 | Open Details / rename        | RMB an inventory cell, a world warp, or a world object |
@@ -80,19 +89,19 @@ Map growth happens at two points:
    session switch is needed.  Painting far from any laid-out map (no flush
    contact possible) stays a no-op.
 
-The paint-time path (`func/paint.lua`) calls `Session:createMapAtCursor()`
+The paint-time path (`domain/paint.lua`) calls `Session:createMapAtCursor()`
 which delegates to `MapGrid.createForPaint` (single block) or
 `MapGrid.createForBlocks` (blueprint rect).  Blueprint stamps detect void
 cells in the stamp rect and pre-create the map before the stamp loop runs.
 
-`func/map_grid.lua` derives world placement from the connection graph alone
+`domain/map_grid.lua` derives world placement from the connection graph alone
 (BFS over connection offsets — no schema change, root world-anchored at
 (0,0)):
 
 - **Multi-connection sides**: a side can carry MORE than one connection.
   `def.connections[dir]` keeps the single engine-visible primary (the first
   connection on that side); editor-only extras live in
-  `def.connectionsExtra[dir]`. `Common.connectionsOn(def, dir)` returns the
+  `def.connectionsExtra[dir]`. `Connections.connectionsOn(def, dir)` returns the
   union and every grid/neighbor traversal walks it. Each connection records a
   `size` (its seam span in blocks) so connections on a side never overlap.
 - **Seam gaps** (`seamGaps`/`edgeCoverage`): the free seams of a layout member
@@ -107,7 +116,7 @@ cells in the stamp rect and pre-create the map before the stamp loop runs.
   may already carry connections — a partial cover just leaves smaller gap voids
   that slot into the leftover space instead of being rejected outright.
 - **Create** (`createMap`): a new `_EXT` map wired via
-  `Common.addConnection` (2-way) to every accepting flush contact — an
+  `Connections.addConnection` (2-way) to every accepting flush contact — an
   occupied side stacks an extra instead of clobbering the primary — tracked
   whole under `mapamap_new_maps` (snapshot taken AFTER wiring) so it persists
   across a reload. Wired existing maps are marked `neighborDirty` so their
@@ -145,12 +154,13 @@ block painting resolve through the same cursor cell.
 
 ## Reusing `map_editor` code
 
-The `func/` files are copied from `mods/map_editor` with the internal
-`mods.map_editor.` requires rewritten to `mods.mapamap.`.
+The `domain/` `engine/` `storage/` files are copied from `mods/map_editor` with
+the internal `mods.map_editor.` requires rewritten to `mods.mapamap.`.
 They expect an editor-shaped object (`mod, game, data, mapId, def, tileset,
 map, cursorBx/ cursorBy, selectedBlock, mapChanged, undo, neighbors,
 neighborMaps, neighborOriginals, neighborDirty, expandShiftL/T,
-_originalSnapshot, ...`) which `session.lua` provides and `input.lua` fills.
+_originalSnapshot, ...`) which `domain/edit_session.lua` provides and
+`controllers/input.lua` fills.
 
 Do **not** pull in the full-screen scene modules (`scene/*`, `renderer/drawing`)
 — the overlay draws its own UI. Save keys are namespaced (`mapamap_patches`,
@@ -176,8 +186,8 @@ coexist without clobbering each other.
   `love.graphics.push("all")` + `origin()` and restore color.
 - Guard all love input wrappers with the `active` flag so the vanilla game is
   untouched when the overlay is closed.
-- Use `func.save`'s diff/patch helpers rather than writing whole maps; new maps
-  are stored whole under `mapamap_new_maps`.
+- Use `storage/patch_saver`'s diff/patch helpers rather than writing whole maps;
+  new maps are stored whole under `mapamap_new_maps`.
 - Paint-time map creation (`createForBlocks`/`createForPaint`) fires when the
   cursor lands on void adjacent to a laid-out map.  The created map is wired
   with reciprocal connections immediately; no session switch or undo step is
