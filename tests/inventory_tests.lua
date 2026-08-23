@@ -1,7 +1,8 @@
 -- Inventory component tests: tab mounting by item kind, geometry hit-testing
--- (tabs + cells), pointer routing (click a cell loads it into the active
--- hotbar slot, tab click switches tab), drag-drop onto the panel, wheel
--- scroll, and blueprint captures surfacing in the Blueprints tab.
+-- (tabs + cells + toolbar shortcuts), pointer routing (click a cell loads it
+-- into the active hotbar slot, shortcut cells mirror E/F/R/M, tab click
+-- switches tab), drag-drop onto the panel, wheel scroll, legacy-save template
+-- cleanup, and blueprint captures surfacing in the Blueprints tab.
 
 package.path = "../../../?.lua;" .. package.path
 
@@ -17,6 +18,7 @@ local Hotbar = require("mods.mapamap.components.hotbar")
 local Inventory = require("mods.mapamap.components.inventory")
 local MapOps = require("mods.mapamap.domain.map_ops")
 local Panel = require("mods.mapamap.components.panel")
+local State = require("mods.mapamap.storage.config")
 
 local mod = {
   log = { warn = function() end, info = function() end, error = function() end },
@@ -37,15 +39,26 @@ end
 
 local VW, VH = 640, 576
 
--- Centre of inventory grid cell `i` (1-based) in the active tab's grid.
+-- Centre of inventory CONTENT cell `i` (1-based) on the active tab.  The
+-- first grid slot is the tab's toolbar shortcut, so content starts at the
+-- second cell.
 local function inventoryCellCentre(i)
   local px, py = Inventory.rect(VW, VH)
-  local ci = i - 1
+  local ci = i
   local col = ci % Inventory.COLS
   local row = math.floor(ci / Inventory.COLS)
   return px + Panel.PAD + col * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2,
          py + Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP + Panel.TAB_H + Inventory.GAP
             + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
+end
+
+-- Centre of the toolbar shortcut cell (the first grid slot).  Its letter
+-- and action follow the active tab.
+local function shortcutCentre()
+  local px, py = Inventory.rect(VW, VH)
+  return px + Panel.PAD + Inventory.SLOT / 2,
+         py + Panel.PAD + Panel.TITLE_H + Panel.TITLE_GAP + Panel.TAB_H + Inventory.GAP
+            + Inventory.SLOT / 2
 end
 
 -- Centre of tab button `i` (1-based).
@@ -79,16 +92,19 @@ end
 function test_itemAt_cellGrid()
   local px, _ = Inventory.rect(VW, VH)
   assert(Inventory.itemAt(VW, VH, px + 4, 8, 1) == nil, "y before panel tab row is nil")
-  -- First cell centre maps to slot 1 on page one.
+  -- The leading toolbar shortcut is not content.
+  local sx, sy = shortcutCentre()
+  assert(Inventory.shortcutAt(VW, VH, sx, sy) == 1, "shortcut cell hit-tests")
+  assert(Inventory.itemAt(VW, VH, sx, sy, 1) == nil, "shortcut cell is not content")
+  -- First content cell centre maps to content index 1 on page one.
   local cx, cy = inventoryCellCentre(1)
-  assert(Inventory.itemAt(VW, VH, cx, cy, 1) == 1, "first cell is slot 1")
-  -- Fifth horizontal position (col 4, row 0) maps past the list for 3 items
-  -- but is still a valid grid slot (page-relative).
+  assert(Inventory.itemAt(VW, VH, cx, cy, 1) == 1, "first content cell is index 1")
+  -- Fifth content cell (grid slot 6) is content index 5.
   local ix, iy = inventoryCellCentre(5)
-  assert(Inventory.itemAt(VW, VH, ix, iy, 1) == 5, "col 4 maps to slot 5")
+  assert(Inventory.itemAt(VW, VH, ix, iy, 1) == 5, "fifth content cell is index 5")
   -- Outside the panel entirely.
-  local px, py, pw, ph = Inventory.rect(VW, VH)
-  assert(Inventory.itemAt(VW, VH, px + pw + 4, py + 4, 1) == nil, "beyond the panel is nil")
+  local px2, py2, pw2, ph2 = Inventory.rect(VW, VH)
+  assert(Inventory.itemAt(VW, VH, px2 + pw2 + 4, py2 + 4, 1) == nil, "beyond the panel is nil")
 end
 
 function test_tabAt_fit()
@@ -174,7 +190,7 @@ function test_inventoryCellLoadsIntoActiveSlot()
     if cell == Input.inventory.items[1] then target = i break end
   end
   assert(target, "stored item should appear in the tab list")
-  local per = Inventory.perPage(VW, VH)
+  local per = Inventory.contentPerPage(VW, VH)
   Input.inventory.scroll = math.floor((target - 1) / per) + 1
   local onPage = target - (Input.inventory.scroll - 1) * per
   local cx, cy = inventoryCellCentre(onPage)
@@ -202,13 +218,15 @@ function test_dragDropOntoInventoryAddsItem()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   assert(s, "no session")
   resetInput()
-  Input.dragItem = { kind = "block", id = 9 }
+  Input.dragItem = { kind = "blueprint", id = "bp_drop" }
   local cx, cy = inventoryCellCentre(1)
   local consumed = Input.mousereleased(s, cx, cy, 1)
   assert(consumed, "release over the inventory should be consumed")
   assert(#Input.inventory.items == 1, "released item should join the inventory")
-  assert(Input.inventory.items[1].id == 9, "inventory holds the carried item")
+  assert(Input.inventory.items[1].id == "bp_drop", "inventory holds the carried item")
   assert(Input.dragItem == nil, "drag cleared after release")
+  -- A drop must not hijack the view: the entry only shows on its own tab.
+  assert(Input.inventory.tab == 1, "drop keeps the current tab")
 end
 
 function test_hotbarDragSwapsSlots()
@@ -249,6 +267,9 @@ function test_hotbarDragAddsCopyToInventory()
     "dragged hotbar item joins the inventory")
   assert(Input.hotbar[1] and Input.hotbar[1].id == 3,
     "the hotbar copy stays in its slot")
+  -- A hotbar drop must not switch the panel's tab: the copy only shows on
+  -- its respective tab.
+  assert(Input.inventory.tab == 1, "hotbar drop keeps the current tab")
   assert(Input.dragItem == nil and Input.dragFromSlot == nil,
     "drag state clears after the drop")
 end
@@ -290,7 +311,7 @@ function test_wheelScrollsInventoryPage()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   assert(s, "no session")
   resetInput()
-  local per = Inventory.perPage(VW, VH)
+  local per = Inventory.contentPerPage(VW, VH)
   Input.inventory.items = {}
   for i = 1, per + 3 do
     Input.inventory.items[i] = { kind = "block", id = i }
@@ -317,6 +338,76 @@ function test_wheelScrollsInventoryPage()
   local up = Input.wheelmoved(s, -1)
   _G.love.mouse.getPosition = orig
   assert(up and Input.inventory.scroll < max, "wheel up scrolls back")
+end
+
+-- The first grid cell of every tab is that tab's ONE toolbar shortcut:
+-- [E] on Tiles, [F] on Entities, [R] on Blueprints, [M] on Brushes.  No
+-- empty reserve cells follow it -- content starts at the second cell.
+function test_shortcutCellsTogglePanels()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  resetInput()
+  Input.showInventory = true
+  -- Hit-testing: the first grid slot is the shortcut on any tab, and it
+  -- is never content.
+  local sx, sy = shortcutCentre()
+  assert(Inventory.shortcutAt(VW, VH, sx, sy) == 1,
+    "the first grid cell hit-tests as the shortcut")
+  assert(Inventory.itemAt(VW, VH, sx, sy, 1) == nil,
+    "the shortcut cell is not content")
+  -- [E] opens (and re-click closes) the tileset picker.
+  Input.inventory.tab = 1
+  assert(Input.mousepressed(s, game, sx, sy, 1), "[E] shortcut click is consumed")
+  assert(Input.showPicker, "[E] shortcut opens the picker")
+  Input.mousepressed(s, game, sx, sy, 1)
+  assert(not Input.showPicker, "[E] shortcut toggles the picker closed")
+  -- [F] swaps whatever side panel is open for the factory.
+  Input.showEntitySelector = false
+  Input.showPicker = true
+  Input.inventory.tab = 2
+  assert(Input.mousepressed(s, game, sx, sy, 1), "[F] shortcut click is consumed")
+  assert(Input.showEntitySelector and not Input.showPicker,
+    "[F] shortcut swaps the picker for the factory")
+  -- [R] arms the blueprint rectangle-select capture (the Blueprints tab
+  -- itself is reached by clicking its tab button).
+  Input.blueprintMode = false
+  Input.inventory.tab = 3
+  assert(Input.mousepressed(s, game, sx, sy, 1), "[R] shortcut click is consumed")
+  assert(Input.blueprintMode and not Input.showPicker,
+    "[R] shortcut arms blueprint rect-select")
+  -- [M] opens the Brush Maker alongside the inventory.
+  Input.showBrushEditor = false
+  Input.inventory.tab = 4
+  assert(Input.mousepressed(s, game, sx, sy, 1), "[M] shortcut click is consumed")
+  assert(Input.showBrushEditor and Input.showInventory,
+    "[M] shortcut opens the Brush Maker")
+end
+
+-- Content paging leaves room for the one pinned shortcut on every page.
+function test_contentPerPage_leavesShortcutRoom()
+  assert(Inventory.contentPerPage(VW, VH)
+      == Inventory.perPage(VW, VH) - 1,
+    "each page shows perPage minus the shortcut cell")
+end
+
+-- Legacy saves that still carry template tools load without them; real items
+-- survive the cleanup.
+function test_loadInventory_dropsLegacyTemplates()
+  mod.save.get = function(_, key)
+    if key == "mapamap_inventory" then
+      return { items = {
+        { kind = "block", id = 7 },
+        { kind = "entity", entityType = "warp", newWarp = true },
+        { kind = "entity", entityType = "object", newObject = true },
+        { kind = "entity", entityType = "sign", newSign = true },
+      } }
+    end
+    return nil
+  end
+  State.loadInventory(Input, mod)
+  mod.save.get = function() return nil end
+  local inv = Input.inventory
+  assert(#inv.items == 1 and inv.items[1].kind == "block" and inv.items[1].id == 7,
+    "template tools are stripped from legacy saves")
 end
 
 function test_blueprintCaptureAddsToInventory()
@@ -375,6 +466,57 @@ function test_blueprintPaintCanSpanVisibleMaps()
     "stamp writes root and neighbor cells according to world-block placement")
   assert(session.neighborDirty.EAST == true, "neighbor stamp is marked dirty")
   assert(rebuilt.root > 0 and rebuilt.east > 0, "touched renderers are rebuilt")
+end
+
+function test_blueprintCaptureCarriesSigns()
+  resetInput()
+  local root = { width = 3, height = 2, tileset = "TS_A", blocks = { 1, 1, 1, 1, 1, 1 },
+    signs = {
+      { x = 1, y = 1, text = "inside", label = "In" },
+      { x = 5, y = 1, text = "outside", label = "Out" },
+    } }
+  local session = {
+    def = root,
+    neighbors = {},
+  }
+  -- Rect covers world blocks (0..1, 0..1) = walk cells (0..3, 0..3).
+  Input.selectStart = { bx = 0, by = 0 }
+  Input.selectEnd = { bx = 1, by = 1 }
+  local id = Input.captureBlueprint(session)
+  assert(id, "capture should produce a blueprint")
+  local bp
+  for _, it in ipairs(Input.inventory.items) do
+    if it.kind == "blueprint" and it.id == id then bp = it end
+  end
+  assert(bp and bp.signs and #bp.signs == 1,
+    "capture collects the signs inside the rectangle")
+  assert(bp.signs[1].x == 1 and bp.signs[1].y == 1,
+    "captured sign coords are relative to the rect origin")
+  assert(bp.signs[1].text == "inside", "the sign keeps its text")
+end
+
+function test_blueprintPaintStampsSigns()
+  local root = { width = 2, height = 1, blocks = { 0, 0 }, signs = {} }
+  local rebuilt = { root = 0 }
+  local session = {
+    def = root,
+    neighbors = {},
+    neighborMaps = {},
+    neighborDirty = {},
+    map = { renderer = { rebuild = function() rebuilt.root = rebuilt.root + 1 end } },
+    refreshLiveRenderers = function() end,
+    cursorBx = 2,
+    cursorBy = 0,
+  }
+  local changed = MapOps.paintBlueprint(session,
+    { w = 1, h = 1, tiles = { false },
+      signs = { { x = 0, y = 0, text = "hi", label = "S", index = 7 } } })
+  assert(changed, "a stamp carrying a sign should change the map")
+  assert(#root.signs == 1, "the sign lands on the destination map")
+  local s = root.signs[1]
+  assert(s.x == 2 and s.y == 0, "sign position offsets by the cursor cell")
+  assert(s.text == "hi" and s.label == "S", "the stamped sign keeps its text")
+  assert(s.index == 1, "stamped signs re-index on the destination map")
 end
 
 function test_tabToggleHidesAndShowsInventory()
@@ -489,6 +631,9 @@ return {
     "test_wheelScrollsInventoryPage",
     "test_blueprintCaptureAddsToInventory",
     "test_blueprintCaptureCanSpanVisibleMaps",
+    "test_blueprintCaptureCarriesSigns",
+    "test_blueprintPaintStampsSigns",
+    "test_blueprintPaintCanSpanVisibleMaps",
     "test_blueprintPaintCanSpanVisibleMaps",
     "test_tabToggleHidesAndShowsInventory",
     "test_cursorOnlyActiveWhileMouseIsDown",
