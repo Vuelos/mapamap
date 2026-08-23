@@ -106,13 +106,34 @@ function Blueprints.capture(ui, session)
   for _, nb in ipairs(session.neighbors or {}) do
     collectObjects(nb.def, math.floor(nb.ox / Common.CELL_PX), math.floor(nb.oy / Common.CELL_PX))
   end
-  
+
+  -- Signs ride along like objects (def.signs only: gen-2 readable bgEvents
+  -- stay put so a stamp never duplicates one).
+  local signs = {}
+  local function collectSigns(def, offX, offY)
+    for _, s in ipairs(def and def.signs or {}) do
+      local worldX = offX + s.x
+      local worldY = offY + s.y
+      if worldX >= cellX0 and worldX <= cellX1 and worldY >= cellY0 and worldY <= cellY1 then
+        local copy = {}
+        for k, v in pairs(s) do copy[k] = v end
+        copy.x = worldX - cellX0
+        copy.y = worldY - cellY0
+        signs[#signs + 1] = copy
+      end
+    end
+  end
+  collectSigns(session.def, 0, 0)
+  for _, nb in ipairs(session.neighbors or {}) do
+    collectSigns(nb.def, math.floor(nb.ox / Common.CELL_PX), math.floor(nb.oy / Common.CELL_PX))
+  end
+
   local id = "blueprint_" .. os.time()
   -- Blueprints live in the inventory (its Blueprints tab is the only
   -- container), stored whole so the tab previews the captured grid.
-  Inventory.add(ui, { 
-    kind = "blueprint", id = id, w = w, h = h, 
-    tiles = tiles, warps = warps, objects = objects 
+  Inventory.add(ui, {
+    kind = "blueprint", id = id, w = w, h = h,
+    tiles = tiles, warps = warps, objects = objects, signs = signs
   })
   ui.selectStart, ui.selectEnd = nil, nil
   -- The capture is done: leave rectangle-select and show the inventory's

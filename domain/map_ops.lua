@@ -6,6 +6,7 @@ local Common = require("mods.mapamap.common")
 local Snapshot = require("mods.mapamap.domain.snapshot")
 local Gen = require("mods.mapamap.engine.gen")
 local WorldAdapter = require("mods.mapamap.engine.world_adapter")
+local Bridge = require("mods.mapamap.engine.dramaless_bridge")
 local CELL_PX = Common.CELL_PX
 local BLOCK_PX = Common.BLOCK_PX
 
@@ -171,7 +172,8 @@ local function paintTarget(self, cellX, cellY)
 end
 
 -- Renders the affected map (the edited one, or a connected map) after a
--- block change.
+-- block change, and notifies the renderer-mod bridge so an installed
+-- DRAMALESS_SHAPE re-meshes the same map in its voxel view.
 local function rebuildFor(self, mapId)
   if mapId then
     local m = self.neighborMaps and self.neighborMaps[mapId]
@@ -179,6 +181,7 @@ local function rebuildFor(self, mapId)
   else
     Gen.rebuildRenderer(self.map)
   end
+  Bridge.edited(self, mapId)
 end
 
 function MapOps.paintBlock(self)
@@ -350,7 +353,36 @@ local Graft = require("mods.mapamap.engine.graft")
       end
     end
   end
-  
+  -- Paint signs from the blueprint (re-indexed like objects; a stamp is a
+  -- real new sign, never a reference to the captured one).
+  if bp.signs then
+    for _, bpSign in ipairs(bp.signs) do
+      local cx = cursorCx0 + bpSign.x
+      local cy = cursorCy0 + bpSign.y
+      local mapId, def, ox, oy = Neighbors.mapAt(self.def, self.neighbors, cx, cy)
+      if def then
+        local localCx = cx - math.floor((ox or 0) / CELL_PX)
+        local localCy = cy - math.floor((oy or 0) / CELL_PX)
+        if localCx >= 0 and localCy >= 0 and localCx < def.width * 2 and localCy < def.height * 2 then
+          def.signs = def.signs or {}
+          local maxIndex = 0
+          for _, s in ipairs(def.signs) do
+            if (s.index or 0) > maxIndex then maxIndex = s.index end
+          end
+          local newSign = {}
+          for k, v in pairs(bpSign) do newSign[k] = v end
+          newSign.x = localCx
+          newSign.y = localCy
+          newSign.index = maxIndex + 1
+          if self.undo then self.undo:capture(def) end
+          table.insert(def.signs, newSign)
+          changed = true
+          if mapId ~= nil then self.neighborDirty[mapId] = true end
+        end
+      end
+    end
+  end
+
   if changed then
     for tilesetId in pairs(graftedTilesets) do
       -- The stamp grew this tileset's atlas: live renderers hold the
@@ -516,7 +548,7 @@ function MapOps.revertBlock(self)
             if self.undo then self.undo:capture(def, self.expandShiftL, self.expandShiftT, nil, {idx}, {oldVal}) end
             def.blocks[idx] = newVal
             self.mapChanged = true
-            Gen.rebuildRenderer(self.map)
+            rebuildFor(self, nil)
           end
        end
      end
@@ -617,6 +649,7 @@ function MapOps.restoreSnapshot(self, kind)
     -- the neighbor set and re-capture its originals.
     self:rebuildNeighbors()
   end
+  Bridge.edited(self, mapId)
   self.mapChanged = true
 end
 
