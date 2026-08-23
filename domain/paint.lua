@@ -56,27 +56,32 @@ function Paint.paintAt(ui, brush, session, mx, my)
     return session:placeItem(item.id)
   end
 
-  -- Entities place a warp / object / sign at the cursor depending on entityType.
+  -- Entities place a warp / object / sign at the cursor depending on
+  -- entityType.  A `create` payload (Entity Creator form) carries the fully
+  -- specified entity; plain entity cells act as copy tools.
   if item.kind == "entity" then
     session.cursorBx = tx
     session.cursorBy = ty
     local et = item.entityType
     if et == "warp" then
-      if item.newWarp then
-        return session:placeWarp(tx, ty) ~= nil
+      if item.create then
+        return session:placeWarp(tx, ty, item.create.destMap,
+          item.create.destWarp) ~= nil
       end
       return session:placeWarp(tx, ty, item.destMap, item.destWarp) ~= nil
     elseif et == "object" then
-      if item.newObject then
-        local o = session:placeNewObject(tx, ty)
-        if o then
-          session.selectedItem = o
-          Details.open(ui, session, { entity = o, entityType = "object" })
-        end
+      if item.create then
+        local o = session:placeObjectSpec(tx, ty, item.create)
+        if o then session.selectedItem = o end
         return o ~= nil
       end
       return session:placeObjectCopy(tx, ty, item.obj) ~= nil
     elseif et == "sign" then
+      if item.create then
+        local s = session:placeSignSpec(tx, ty, item.create)
+        if s then session.selectedItem = s end
+        return s ~= nil
+      end
       local s = session:placeNewSign(tx, ty)
       if s then
         session.selectedItem = s

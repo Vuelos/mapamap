@@ -7,6 +7,8 @@
 -- input module stays a pure dispatcher.
 
 local Hotbar = require("mods.mapamap.components.hotbar")
+local Picker = require("mods.mapamap.components.picker")
+local Keys = require("mods.mapamap.storage.save_keys")
 
 local State = {}
 
@@ -31,6 +33,9 @@ function State.reset(ui)
   ui.mouseButtons = { [1] = false, [2] = false, [3] = false }
   ui.dragItem = nil
   ui.dragFromSlot = nil
+  -- The picker opens on the People catalog (placeable NPCs first).
+  ui.pickerTileset = Picker.SPEC_PERSON
+  ui.pickerScroll = 1
   ui.pickerTilesetScroll = 1
   ui.pickerDropOpen = false
   ui.blueprintMode = false
@@ -41,6 +46,7 @@ function State.reset(ui)
   ui.details = nil
   ui.encEditor = nil
   ui.showEntitySelector = false
+  ui.entityCreator = nil
   ui.inventory.tab = 1
   ui.inventory.scroll = 1
   ui.showInventory = true
@@ -60,41 +66,44 @@ end
 -- hotbar item is re-pointed at the Details/warp panel whenever the session (and
 -- therefore def.warps) changes.
 function State.onMapEntry(ui, session)
-  -- Re-default the picker to the current map's tileset (featured first).
-  ui.pickerTileset = nil
+  -- Re-default the picker to the People catalog (the entity tools stay
+  -- first-class across border walks; tilesets are one dropdown away).
+  ui.pickerTileset = Picker.SPEC_PERSON
   ui.pickerScroll = 1
   ui.pickerTilesetScroll = 1
   ui.pickerDropOpen = false
   -- Warp selection / details reference live def.warps entries: drop them on a
-  -- session change so they never dangle onto the old map's data.
+  -- session change so they never dangle onto the old map's data.  The Entity
+  -- Creator form caches its session for the dropdown lists, so it goes too.
   ui.SelectedItem = nil
   ui.warpDestPick = false
   ui.details = nil
+  ui.entityCreator = nil
   if Hotbar.selected(ui) then Hotbar.apply(ui, session) end
 end
 
 -- Persists the hotbar layout through the mod save system.
 function State.saveHotbar(ui, mod)
-  mod.save:set("mapamap_hotbar", State.serialize(ui))
+  mod.save:set(Keys.HOTBAR, State.serialize(ui))
 end
 
 -- Persists the inventory collection through the mod save system.
 function State.saveInventory(ui, mod)
-  mod.save:set("mapamap_inventory", ui.inventory)
+  mod.save:set(Keys.INVENTORY, ui.inventory)
 end
 
 -- Loads the saved inventory collection ({ items, tab, scroll }).  Older saves
 -- from the pre-inventory blueprint book are folded in so no captures are lost.
--- Template items (New Warp / New Object) are always present at position 1 of
--- their respective tabs.
+-- Template tools (New Warp / New Object / New Sign) from older saves are
+-- dropped: entity creation now lives behind the F factory flow.
 function State.loadInventory(ui, mod)
-  local saved = mod.save:get("mapamap_inventory", nil)
+  local saved = mod.save:get(Keys.INVENTORY, nil)
   if saved and type(saved) == "table" and type(saved.items) == "table" then
     ui.inventory = saved
   else
     ui.inventory = { items = {}, tab = 1, scroll = 1 }
   end
-  local book = mod.save:get("mapamap_blueprints", nil)
+  local book = mod.save:get(Keys.LEGACY_BLUEPRINTS, nil)
   if book and type(book) == "table" then
     for _, e in ipairs(book) do
       if e and e.id then
@@ -109,54 +118,15 @@ function State.loadInventory(ui, mod)
       end
     end
   end
-  -- Ensure template items exist and are first in their tabs.
-  local hasNewWarp, hasNewObject, hasNewSign = false, false, false
+  -- One-time cleanup of legacy template tools.
+  local kept = {}
   for _, it in ipairs(ui.inventory.items) do
-    if it.kind == "entity" then
-      if it.entityType == "warp" and it.newWarp then hasNewWarp = true end
-      if it.entityType == "object" and it.newObject then hasNewObject = true end
-      if it.entityType == "sign" and it.newSign then hasNewSign = true end
+    if not (it.kind == "entity"
+        and (it.newWarp or it.newObject or it.newSign)) then
+      kept[#kept + 1] = it
     end
   end
-  local Inventory = require("mods.mapamap.components.inventory")
-  if not hasNewWarp then
-    Inventory.add(ui, { kind = "entity", entityType = "warp", newWarp = true })
-  end
-  if not hasNewObject then
-    Inventory.add(ui, { kind = "entity", entityType = "object", newObject = true })
-  end
-  if not hasNewSign then
-    Inventory.add(ui, { kind = "entity", entityType = "sign", newSign = true })
-  end
-  -- Push any existing templates to position 1 of their tabs.
-  local function moveTemplateToFront(kind, flag, et)
-    for i = #ui.inventory.items, 1, -1 do
-      local it = ui.inventory.items[i]
-      local match
-      if et then
-        match = it.kind == kind and it.entityType == et and it[flag]
-      else
-        match = it.kind == kind and it[flag]
-      end
-      if match then
-        table.remove(ui.inventory.items, i)
-        local tabIdx = Inventory.tabFor(it)
-        local insertPos = 1
-        for j, other in ipairs(ui.inventory.items) do
-          if Inventory.tabFor(other) == tabIdx then
-            insertPos = j
-            break
-          end
-          insertPos = j + 1
-        end
-        table.insert(ui.inventory.items, insertPos, it)
-        break
-      end
-    end
-  end
-  moveTemplateToFront("entity", "newWarp", "warp")
-  moveTemplateToFront("entity", "newObject", "object")
-  moveTemplateToFront("entity", "newSign", "sign")
+  ui.inventory.items = kept
 end
 
 return State

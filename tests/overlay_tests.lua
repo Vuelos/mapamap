@@ -262,6 +262,35 @@ function test_worldMarkersHiddenByStackAbove()
     "no warp circles during a battle")
 end
 
+-- Regression: a Gen 2 def carries its signs as bgEvents (kinds 0..6 are
+-- signs; 7 ITEM / 8 COPY are not).  Placing an editor sign does
+-- `def.signs = def.signs or {}`, which used to SHADOW the def's bgEvents and
+-- every pre-existing sign marker vanished.  The getter must merge both
+-- lists.
+function test_visibleSignsMergeBgEventsAndEditorSigns()
+  local s = assert(Session.new(mod, game, "PALLET_TOWN"))
+  freshInput()
+  -- Gen 2-style def: two sign bgEvents plus one ITEM (kind 7, not a sign).
+  local evA = { x = 1, y = 1, kind = 0, text = "A" }
+  local evB = { x = 2, y = 1, kind = 3, text = "B" }
+  local evItem = { x = 3, y = 1, kind = 7, item = "POTION" }
+  s.def.bgEvents = { evA, evB, evItem }
+  -- Placing an editor sign takes the gen-1 path (def.signs array).
+  local placed = assert(s:placeNewSign(4, 1), "placing an editor sign succeeds")
+  local vis = Overlay._visibleSigns(s, game)
+  local foundA, foundB, foundPlaced, foundItem = false, false, false, false
+  for _, e in ipairs(vis) do
+    if e.sign == evA then foundA = true end
+    if e.sign == evB then foundB = true end
+    if e.sign == placed then foundPlaced = true end
+    if e.sign == evItem then foundItem = true end
+  end
+  assert(foundA and foundB,
+    "bgEvent sign markers stay visible once an editor sign exists")
+  assert(foundPlaced, "the editor sign is enumerated alongside them")
+  assert(not foundItem, "ITEM bgEvents are not sign markers")
+end
+
 return {
   name = "MAPAMAP_OVERLAY",
   tests = {
@@ -273,5 +302,6 @@ return {
     "test_mapBorderToggleGatesDraw",
     "test_mapBorderDrawsConnectionBands",
     "test_worldMarkersHiddenByStackAbove",
+    "test_visibleSignsMergeBgEventsAndEditorSigns",
   },
 }

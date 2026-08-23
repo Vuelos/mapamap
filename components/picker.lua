@@ -1,10 +1,11 @@
--- Tileset picker component: the panel to the inventory's right with a tileset
+-- Tileset picker component: the panel to the inventory's right with a catalog
 -- dropdown at the top and a grid of the active category below.
 --
--- The dropdown entry is a mixed catalog: a virtual "Items & NPCs" entry first,
--- then every real tileset (the current map's tileset kept default /
--- highlighted).  Selecting a real tileset shows its blocks; selecting the
--- virtual entry shows the NPC sprite catalog.
+-- The dropdown entry is a mixed catalog: three virtual NPC entries first
+-- (People = placeable person sprites, Monsters = wild-Pokemon tools,
+-- Balls = item-ball tools), then every real tileset (the current map's
+-- tileset kept default / highlighted).  Selecting a real tileset shows its
+-- blocks; selecting a virtual entry shows its entity tool catalog.
 --
 -- This module owns all picker geometry (panel, dropdown, grid), the catalog
 -- ordering, and the draw routine.  Input queries it for hit-testing; the
@@ -17,8 +18,59 @@ local Panel = require("mods.mapamap.components.panel")
 
 local Picker = {}
 
-Picker.SPEC = "__ITEMS_NPCS__"   -- pseudo-tileset id for NPC sprites
-Picker.SPECIAL_LABEL = "NPCs"
+Picker.SPEC_PERSON = "__NPC_PEOPLE__"    -- pseudo-tileset id: person sprites
+Picker.SPEC_MONSTER = "__NPC_MONSTERS__" -- pseudo-tileset id: wild mon tools
+Picker.SPEC_ITEMS = "__NPC_ITEMS__"      -- pseudo-tileset id: item ball tools
+
+Picker.SPECIAL_LABELS = {
+  [Picker.SPEC_PERSON] = "People",
+  [Picker.SPEC_MONSTER] = "Monsters",
+  [Picker.SPEC_ITEMS] = "Items",
+}
+
+-- True for every virtual (non-tileset) catalog id.
+function Picker.isSpecial(id)
+  return Picker.SPECIAL_LABELS[id] ~= nil
+end
+
+-- Every catchable species straight from data.pokemon -- no hardcoded list:
+-- one entry per dex record, ordered by dex number (ties break on name).
+function Picker.speciesList(session)
+  local pokemon = session.data and session.data.pokemon or {}
+  local out = {}
+  for k, v in pairs(pokemon) do
+    if type(v) == "table" and v.dex then out[#out + 1] = { id = k, dex = v.dex } end
+  end
+  table.sort(out, function(a, b)
+    if a.dex ~= b.dex then return a.dex < b.dex end
+    return a.id < b.id
+  end)
+  return out
+end
+
+-- Generic critter sheets used as the thumbnail when a species has no
+-- overworld sheet of its own; picked deterministically per species so each
+-- keeps a stable look across sessions.
+local GENERIC_MONSTER_SPRITES = {
+  "SPRITE_MONSTER", "SPRITE_BIRD", "SPRITE_SEEL",
+  "SPRITE_FAIRY", "SPRITE_SNORLAX",
+}
+
+-- The overworld sprite shown for a species tool: an exact-named sheet when
+-- the extraction carries one (SNORLAX -> SPRITE_SNORLAX), else a stable
+-- generic monster sheet.
+function Picker.speciesSprite(session, speciesId)
+  local sprites = session.data and session.data.sprites or {}
+  if sprites["SPRITE_" .. speciesId] then return "SPRITE_" .. speciesId end
+  local keys = {}
+  for _, s in ipairs(GENERIC_MONSTER_SPRITES) do
+    if sprites[s] then keys[#keys + 1] = s end
+  end
+  if #keys == 0 then return nil end
+  local h = 0
+  for i = 1, #speciesId do h = (h * 31 + speciesId:byte(i)) % 1000003 end
+  return keys[(h % #keys) + 1]
+end
 
 -- The block grid matches the inventory exactly: same cell size, gap, padding
 -- and column count, so picker thumbnails read at the same scale as the left
@@ -114,22 +166,27 @@ end
 -- ---------------------------------------------------------------------------
 -- Catalog
 
--- The display name for a catalog id (the virtual entry has a friendly label).
+-- The display name for a catalog id (virtual entries have friendly labels).
 function Picker.label(session, id)
-  if id == Picker.SPEC then return Picker.SPECIAL_LABEL end
+  if Picker.SPECIAL_LABELS[id] then return Picker.SPECIAL_LABELS[id] end
   local ts = session.data and session.data.tilesets and session.data.tilesets[id]
   return (ts and ts.name) or ts and ts.label or id or "?"
 end
 
--- Ordered catalog list: the "Items & NPCs" pseudo-tileset first, then every
--- real tileset.  The current map's tileset is moved to the head of the real
+-- Ordered catalog list: the three NPC pseudo-catalogs first, then every real
+-- tileset.  The current map's tileset is moved to the head of the real
 -- tilesets so the picker always shows the map it is editing first.
 function Picker.catalog(session)
-  local out = { Picker.SPEC }
+  local out = { Picker.SPEC_PERSON, Picker.SPEC_MONSTER, Picker.SPEC_ITEMS }
   local cur = session.tileset and session.tileset.id
   local names = {}
-  for k in pairs(session.data and session.data.tilesets or {}) do
-    if k ~= cur then table.insert(names, k) end
+  for k, v in pairs(session.data and session.data.tilesets or {}) do
+    -- Only real tileset records: the Gen 2 extraction shares this table with
+    -- animation side-tables (animFrames, flowerCgbFrames, flowerFrames,
+    -- waterFrames) that are not tilesets and have no block list to browse.
+    if k ~= cur and type(v) == "table" and v.blocks then
+      table.insert(names, k)
+    end
   end
   table.sort(names)
   if cur then table.insert(out, cur) end
@@ -152,7 +209,7 @@ end
 -- keeps a non-current tileset listing ITS OWN blocks instead of the live map's.
 function Picker.tilesetDef(session, selection)
   local tsName = Picker.resolve(selection, session)
-  if not tsName or tsName == Picker.SPEC then return nil end
+  if not tsName or Picker.isSpecial(tsName) then return nil end
   return session.data and session.data.tilesets and session.data.tilesets[tsName]
 end
 
@@ -163,19 +220,58 @@ end
 -- carry srcTileset so the paint brush can graft them into the current map.
 function Picker.itemList(session, selection)
   local data = session.data
-  if selection == Picker.SPEC then
-    -- Virtual catalog: NPC sprites only (map items live in the inventory,
-    -- not the picker).
+  local sprites = data and data.sprites
+
+  -- People: every person sprite, directly placeable as an NPC (kind = "sprite"
+  -- paints through Objects.placeSprite).
+  if selection == Picker.SPEC_PERSON then
     local list = {}
-    local sprites = data and data.sprites
     if sprites then
       local keys = {}
-      for k in pairs(sprites) do table.insert(keys, k) end
+      for k in pairs(sprites) do keys[#keys + 1] = k end
       table.sort(keys)
-      for _, id in ipairs(keys) do list[#list + 1] = { kind = "sprite", id = id } end
+      for _, id in ipairs(keys) do
+        list[#list + 1] = { kind = "sprite", id = id }
+      end
     end
     return list
   end
+
+  -- Monsters: one wild-Pokemon tool per species from data.pokemon (paints
+  -- through Objects.placeObjectSpec with objectType = "mon").
+  if selection == Picker.SPEC_MONSTER then
+    local list = {}
+    for _, sp in ipairs(Picker.speciesList(session)) do
+      list[#list + 1] = {
+        kind = "entity", entityType = "object",
+        create = { objectType = "mon", sprite = Picker.speciesSprite(session, sp.id),
+                   pokemon = sp.id, level = 5 },
+        label = sp.id,
+      }
+    end
+    return list
+  end
+
+  -- Items: one item-ball tool per data.items entry (paints through
+  -- Objects.placeObjectSpec with objectType = "itemball"; the ball sprite is
+  -- defaulted by the placer when the entry has no sheet of its own).
+  if selection == Picker.SPEC_ITEMS then
+    local list = {}
+    local names = {}
+    for k in pairs(data and data.items or {}) do
+      names[#names + 1] = k
+    end
+    table.sort(names)
+    for _, itemId in ipairs(names) do
+      list[#list + 1] = {
+        kind = "entity", entityType = "object",
+        create = { objectType = "itemball", item = itemId },
+        label = itemId,
+      }
+    end
+    return list
+  end
+
   local ts = Picker.tilesetDef(session, selection)
   local blocks = ts and ts.blocks
   local list = {}
@@ -184,7 +280,10 @@ function Picker.itemList(session, selection)
     -- another tileset into the current map via grafting.
     local cur = Picker.current(session)
     local foreign = ts and ts.id ~= cur
-    for i = 1, #blocks do
+    -- Gen 2: stop before the trailing $00 filler metatile slots (see
+    -- Common.effectiveBlockCount) instead of listing pages of dead tiles.
+    local count = Common.effectiveBlockCount(ts)
+    for i = 1, count do
       local item = { kind = "block", id = i - 1 }
       if foreign then item.srcTileset = ts.id end
       list[#list + 1] = item
@@ -221,16 +320,30 @@ function Picker.draw(session, vw, vh, state, font)
   local thumbBundle = (browsedTs and browsedTs ~= session.tileset)
     and session:thumbnailBundle(browsedTs) or nil
 
+  local mx, my = love.mouse.getPosition()
+  local list = Picker.itemList(session, selection)
+
   -- Big, high-contrast header; the active label is clipped to the panel.
-  local pages = math.max(1, math.ceil(#Picker.itemList(session, selection)
-    / Picker.perPage(vw, vh)))
-  local head = Panel.fitText(font,
-    "TILESETS - pg " .. tostring(app.scroll or 1)
-    .. "/" .. tostring(pages), iw - Panel.PAD * 2, 2)
+  -- Hovering a named entry (species / item tool, sprite id) swaps the title
+  -- for that name so virtual-catalog cells stay identifiable without chips.
+  local pages = math.max(1, math.ceil(#list / Picker.perPage(vw, vh)))
+  local baseLabel = Picker.isSpecial(selection)
+    and Picker.label(session, selection) or "TILESETS"
+  local headText = baseLabel .. " - pg " .. tostring(app.scroll or 1)
+    .. "/" .. tostring(pages)
+  local hoverItem = Picker.itemAt(vw, vh, mx, my, app.scroll or 1)
+  if hoverItem then
+    local it = list[hoverItem]
+    local nm = it and (it.label
+      or ((it.kind == "sprite" or it.kind == "item") and it.id) or nil)
+    if nm then
+      headText = nm .. " - pg " .. tostring(app.scroll or 1)
+        .. "/" .. tostring(pages)
+    end
+  end
+  local head = Panel.fitText(font, headText, iw - Panel.PAD * 2, 2)
   Panel.drawTitle(font, head, ix, iy)
   Panel.resetColor()
-
-  local mx, my = love.mouse.getPosition()
 
   -- Tileset dropdown: a single button showing the active catalog entry; the
   -- open list is drawn over the grid below.
@@ -239,12 +352,9 @@ function Picker.draw(session, vw, vh, state, font)
     mx, my, app.dropOpen)
 
   -- Grid for the active catalog.
-  local list = Picker.itemList(session, selection)
   local cols = Picker.cols(vw, vh)
   local perPageItems = Picker.perPage(vw, vh)
   local gridStart = ((app.scroll or 1) - 1) * perPageItems
-
-  local hoverItem = Picker.itemAt(vw, vh, mx, my, app.scroll or 1)
 
   local gx = ix + Panel.PAD
   local gy = iy + Picker.HEAD_H + 6
@@ -288,8 +398,8 @@ function Picker.draw(session, vw, vh, state, font)
       local idx = pageStart + i
       local cid = catalog[idx]
       if not cid then break end
-      local isSel = (cid == activeSel) and cid ~= Picker.SPEC
-      if cid == Picker.SPEC and selection == Picker.SPEC then isSel = true end
+      local isSel = (cid == activeSel) and not Picker.isSpecial(cid)
+      if Picker.isSpecial(cid) and selection == cid then isSel = true end
       entries[i] = { label = Picker.label(session, cid), _sel = isSel }
     end
     local selIdx = nil

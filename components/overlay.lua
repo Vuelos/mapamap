@@ -62,6 +62,45 @@ end
 
 -- --- world cursor highlight ------------------------------------------------
 
+-- Draws a world-cell-aligned rect: a plain rectangle on the flat blit, a
+-- projected polygon while DRAMALESS_SHAPE's voxel pass owns the world (its
+-- ground is perspective, so screen-space rectangles would float off their
+-- cells).  cellsW/cellsH are in CELLS (blocks are 2x2).
+local function strokeCellRect(t, cellX, cellY, cellsW, cellsH, mode)
+  if t.kind == "voxel" then
+    local poly = { Coords.blockPoly(t, cellX, cellY, cellsW, cellsH) }
+    if poly[1] then love.graphics.polygon(mode, poly) end
+    return
+  end
+  local x, y, w, h
+  if cellsW == 1 and cellsH == 1 then
+    x, y, w, h = Coords.cellRect(t, cellX, cellY)
+  else
+    x, y, w, h = Coords.blockRect(t, cellX, cellY)
+    if x and (cellsW ~= 2 or cellsH ~= 2) then
+      w, h = w * cellsW / 2, h * cellsH / 2
+    end
+  end
+  if x then love.graphics.rectangle(mode, x, y, w, h) end
+end
+
+-- The projected screen anchor + local scale for one cell-sized sprite draw:
+-- identical to blockRect's top-left on the flat path; under voxel the anchor
+-- projects and the scale shrinks with distance so ghosts stay glued to the
+-- ground they will land on.
+local function cellAnchor(t, cellX, cellY)
+  if t.kind == "voxel" then
+    local wx, wy = cellX * 16, cellY * 16
+    local x, y = Coords.toScreen(t, wx, wy)
+    if not x then return nil end
+    local ex, ey = Coords.toScreen(t, wx + 16, wy + 16)
+    if not ex then return nil end
+    return x, y, math.abs(ex - x) / 16, math.abs(ey - y) / 16
+  end
+  local x, y = Coords.blockRect(t, cellX, cellY)
+  return x, y, t.sx, t.sy
+end
+
 local function drawCursor(session, game)
   local t = Coords.transform(game)
   if not t then return end
@@ -71,20 +110,20 @@ local function drawCursor(session, game)
     -- cursor highlight while a stamp is selected.
     return
   end
-  local x, y, w, h
-  if (item and (item.kind == "sprite" or item.kind == "item"
-       or item.kind == "entity"))
-       or Input.mouseHoveringSingleCellItem(session) then
+  local single = (item and (item.kind == "sprite" or item.kind == "item"
+                   or item.kind == "entity"))
+                 or Input.mouseHoveringSingleCellItem(session)
+  local cellsW, cellsH = 2, 2
+  local cellX, cellY = session.cursorBx, session.cursorBy
+  if single then
     -- Sprites/entities place on a single 1x1 cell (map-object coords are
     -- walk-grid cells); blocks are 2x2 cells.
-    x, y, w, h = Coords.cellRect(t, session.cursorBx, session.cursorBy)
+    cellsW, cellsH = 1, 1
   else
-    -- Blocks are 2x2 cells; snap the highlight to whole blocks.
-    local cx = session.cursorBx - (session.cursorBx % 2)
-    local cy = session.cursorBy - (session.cursorBy % 2)
-    x, y, w, h = Coords.blockRect(t, cx, cy)
+    -- Blocks snap the highlight to whole blocks.
+    cellX = cellX - (cellX % 2)
+    cellY = cellY - (cellY % 2)
   end
-  if not x then return end
   if not session.map then return end
   -- The border is always drawn so the target cell is visible whether the
   -- brush is idle or mid-drag; the dark fill tint only marks an active
@@ -92,19 +131,28 @@ local function drawCursor(session, game)
   local pressed = Input.mouseDown(1) or Input.mouseDown(2)
   if pressed then
     love.graphics.setColor(0, 0, 0, 0.18)
-    love.graphics.rectangle("fill", x, y, w, h)
+    strokeCellRect(t, cellX, cellY, cellsW, cellsH, "fill")
   end
   love.graphics.setColor(1, 1, 1, 0.95)
-  love.graphics.setLineWidth(1)
-  love.graphics.rectangle("line", x, y, w, h)
+  love.graphics.setLineWidth(t.kind == "voxel" and 2 or 1)
+  strokeCellRect(t, cellX, cellY, cellsW, cellsH, "line")
   -- green accent for sprites/entities so placement vs block-paint is obvious
-  if item and (item.kind == "sprite" or item.kind == "item"
-       or item.kind == "entity") then
+  if single then
     love.graphics.setColor(0.3, 1, 0.4, 0.9)
   else
     love.graphics.setColor(1, 0.9, 0.3, 0.9)
   end
-  love.graphics.rectangle("line", x + 1, y + 1, w - 2, h - 2)
+  if t.kind == "voxel" then
+    strokeCellRect(t, cellX, cellY, cellsW, cellsH, "line")
+  else
+    local x, y, w, h
+    if single then
+      x, y, w, h = Coords.cellRect(t, cellX, cellY)
+    else
+      x, y, w, h = Coords.blockRect(t, cellX, cellY)
+    end
+    if x then love.graphics.rectangle("line", x + 1, y + 1, w - 2, h - 2) end
+  end
   love.graphics.setColor(1, 1, 1, 1)
 end
 
@@ -117,36 +165,29 @@ local function drawSelection(session, game)
   local a = Input.selectStart
   if not a then
     -- Pulldown hint while armed but not dragging yet.
-    local mx, my = love.mouse.getPosition()
-    local x, y, w, h = Coords.blockRect(t,
+    love.graphics.setColor(0.4, 1, 0.6, 0.25)
+    strokeCellRect(t,
       session.cursorBx - (session.cursorBx % 2),
-      session.cursorBy - (session.cursorBy % 2))
-    if x then
-      love.graphics.setColor(0.4, 1, 0.6, 0.25)
-      love.graphics.rectangle("fill", x, y, w, h)
-      love.graphics.setColor(0.4, 1, 0.6, 0.8)
-      love.graphics.setLineWidth(1)
-      love.graphics.rectangle("line", x, y, w, h)
-      love.graphics.setColor(1, 1, 1, 1)
-    end
+      session.cursorBy - (session.cursorBy % 2), 2, 2, "fill")
+    love.graphics.setColor(0.4, 1, 0.6, 0.8)
+    love.graphics.setLineWidth(1)
+    strokeCellRect(t,
+      session.cursorBx - (session.cursorBx % 2),
+      session.cursorBy - (session.cursorBy % 2), 2, 2, "line")
+    love.graphics.setColor(1, 1, 1, 1)
     return
   end
   local b = Input.selectEnd or a
   local b0x, b1x = math.min(a.bx, b.bx), math.max(a.bx, b.bx)
   local b0y, b1y = math.min(a.by, b.by), math.max(a.by, b.by)
   -- a/selectStart carry BLOCK indices (from Input.blockCellAt: floor(cell/2)).
-  -- blockRect expects the block's top-left CELL, so scale by 2 or the box
-  -- lands on the neighbouring block instead of under the cursor.
-  local lx, ly, _, _ = Coords.blockRect(t, b0x * 2, b0y * 2)
-  local rx, ry, _, _ = Coords.blockRect(t, b1x * 2, b1y * 2)
-  if not lx then return end
-  local w = (rx + 32 * t.sx) - lx
-  local h = (ry + 32 * t.sy) - ly
   love.graphics.setColor(0.3, 1, 0.5, 0.2)
-  love.graphics.rectangle("fill", lx, ly, w, h)
+  strokeCellRect(t, b0x * 2, b0y * 2,
+    (b1x - b0x + 1) * 2, (b1y - b0y + 1) * 2, "fill")
   love.graphics.setColor(0.3, 1, 0.5, 0.8)
   love.graphics.setLineWidth(1)
-  love.graphics.rectangle("line", lx, ly, w, h)
+  strokeCellRect(t, b0x * 2, b0y * 2,
+    (b1x - b0x + 1) * 2, (b1y - b0y + 1) * 2, "line")
   love.graphics.setColor(1, 1, 1, 1)
 end
 
@@ -214,24 +255,21 @@ local function drawBlueprintPreview(session, game)
         local _, def = Neighbors.mapAt(session.def, session.neighbors,
           (bx0 + col) * 2, (by0 + row) * 2)
         if def then
-          local x, y, w, h = Coords.blockRect(t, (bx0 + col) * 2, (by0 + row) * 2)
-          if x and not drawPreviewBlock(session, bid, srcTs, x, y, t.sx, t.sy) then
-            love.graphics.setColor(1, 1, 1, 0.3)
-            love.graphics.rectangle("fill", x, y, w, h)
+          local x, y, sx, sy = cellAnchor(t, (bx0 + col) * 2, (by0 + row) * 2)
+          if x then
+            if not drawPreviewBlock(session, bid, srcTs, x, y, sx, sy) then
+              love.graphics.setColor(1, 1, 1, 0.3)
+              strokeCellRect(t, (bx0 + col) * 2, (by0 + row) * 2, 2, 2, "fill")
+            end
           end
         end
       end
     end
   end
   -- Green footprint outline over the whole anchored stamp.
-  local lx, ly, _, _ = Coords.blockRect(t, bx0 * 2, by0 * 2)
-  if lx then
-    local w = bp.w * 32 * t.sx
-    local h = bp.h * 32 * t.sy
-    love.graphics.setColor(0.3, 1, 0.5, 0.85)
-    love.graphics.setLineWidth(1)
-    love.graphics.rectangle("line", lx, ly, w, h)
-  end
+  love.graphics.setColor(0.3, 1, 0.5, 0.85)
+  love.graphics.setLineWidth(1)
+  strokeCellRect(t, bx0 * 2, by0 * 2, bp.w * 2, bp.h * 2, "line")
   love.graphics.setColor(1, 1, 1, 1)
 end
 
@@ -278,15 +316,25 @@ end
 
 -- Generic marker drawer.  `getVisible` is one of the visible* getters; `style`
 -- controls colours, and which entity field carries the label text.
+local function markerCenter(t, ox, oy, cellX, cellY)
+  -- A walk-grid cell's center on screen.  Flat mode offsets the projected
+  -- top-left by half a cell; voxel mode projects the center directly.
+  if t.kind == "voxel" then
+    return Coords.toScreen(t, ox + cellX * 16 + 8, oy + cellY * 16 + 8)
+  end
+  local x, y = Coords.toScreen(t, ox + cellX * 16, oy + cellY * 16)
+  if not x then return nil end
+  return x + 8 * t.sx, y + 8 * t.sy
+end
+
 local function drawEntityMarkers(session, game, getVisible, style)
   local t = Coords.transform(game)
   if not t then return end
   local r = 6 * t.sx
   for _, e in ipairs(getVisible(session, game)) do
     local entity = e[style.key]
-    local x, y = Coords.toScreen(t, e.ox + entity.x * 16, e.oy + entity.y * 16)
-    if x then
-      local cx, cy = x + 8 * t.sx, y + 8 * t.sy
+    local cx, cy = markerCenter(t, e.ox, e.oy, entity.x, entity.y)
+    if cx then
       local selected = entity == session.selectedItem
       love.graphics.setColor(unpack(style.fillColor))
       love.graphics.circle("fill", cx, cy, r)
@@ -360,23 +408,12 @@ local function drawObjects(session, game)
 end
 
 -- Signs: orange circles (same runtime-frame collection, different colour).
--- Gen 2 defs carry no `signs` array: a sign is a readable BACKGROUND EVENT
--- (bgEvents kind 0 READ, 1-4 directional, 5/6 conditional; 7 ITEM and 8 COPY
--- are not signs -- World:bgEventAt is the engine's own dispatch).  Project
--- those so markers (and the hover/entity tools) see them on Gold.
-local function signsOf(def)
-  local list = def and def.signs
-  if list then return list end
-  local bg = def and def.bgEvents
-  if not bg then return nil end
-  local out = {}
-  for _, ev in ipairs(bg) do
-    if (ev.kind or 0) <= 6 then out[#out + 1] = ev end
-  end
-  return out
-end
+-- The gen-1 `signs` array / gen-2 bgEvents merge lives in Signs.mapSigns
+-- (domain), shared with the session's visibleSigns fallback.
+local Signs = require("mods.mapamap.domain.signs")
 
-Overlay._visibleSigns = makeVisibleGetter("signs", "visibleSigns", "sign", signsOf)
+Overlay._visibleSigns = makeVisibleGetter("signs", "visibleSigns", "sign",
+  Signs.mapSigns)
 
 local SIGN_STYLE = {
   key = "sign",
@@ -406,11 +443,8 @@ local function drawEntityDrag(session, game)
   local tx, ty = Coords.toWorldCell(t, mx, my)
   if not tx then return end
   -- Snap the ghost to the target cell center.
-  local wx = drag.ox + tx * 16
-  local wy = drag.oy + ty * 16
-  local sx, sy = Coords.toScreen(t, wx, wy)
-  if not sx then return end
-  local cx, cy = sx + 8 * t.sx, sy + 8 * t.sy
+  local cx, cy = markerCenter(t, drag.ox, drag.oy, tx, ty)
+  if not cx then return end
   local r = 6 * t.sx
   if drag.kind == "entity" and drag.entityType == "warp" then
     love.graphics.setColor(0.2, 0.7, 1, 0.55)
@@ -439,15 +473,12 @@ local function drawDestPick(session, game)
   if not Input.warpDestPick then return end
   local t = Coords.transform(game)
   if t then
-    local x, y, w, h = Coords.cellRect(t, session.cursorBx, session.cursorBy)
-    if x then
-      love.graphics.setColor(1, 0.9, 0.3, 0.5)
-      love.graphics.rectangle("fill", x, y, w, h)
-      love.graphics.setColor(1, 0.9, 0.3, 0.95)
-      love.graphics.setLineWidth(1)
-      love.graphics.rectangle("line", x, y, w, h)
-      love.graphics.setColor(1, 1, 1, 1)
-    end
+    love.graphics.setColor(1, 0.9, 0.3, 0.5)
+    strokeCellRect(t, session.cursorBx, session.cursorBy, 1, 1, "fill")
+    love.graphics.setColor(1, 0.9, 0.3, 0.95)
+    love.graphics.setLineWidth(1)
+    strokeCellRect(t, session.cursorBx, session.cursorBy, 1, 1, "line")
+    love.graphics.setColor(1, 1, 1, 1)
   end
   local vw, vh = love.graphics.getDimensions()
   local label = "PICK DESTINATION FOR WARP"
@@ -504,6 +535,14 @@ function Overlay.draw(session, game, viewport)
     end
     if Input.showBrushEditor then
       BrushEditor.draw(session, Input.brushDraft, vw, vh, session.font)
+    end
+    if Input.showEntitySelector then
+      local EntitySelector = require("mods.mapamap.components.entity_selector")
+      EntitySelector.draw(session, vw, vh, session.font)
+    end
+    if Input.entityCreator then
+      local EntityCreator = require("mods.mapamap.components.entity_creator")
+      EntityCreator.draw(session, Input.entityCreator, vw, vh, session.font)
     end
     if Input.details then
       local Details = require("mods.mapamap.components.details")

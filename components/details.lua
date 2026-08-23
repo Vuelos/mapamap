@@ -42,13 +42,14 @@ end
 --   { warp = <def.warps entry> }    a live warp on the edited map
 --   { item = <inventory cell> }     a stored block/sprite/item/blueprint
 --   { object = <def.objects entry> } a live object on the edited map
--- Field rows are { key, label, value, type } where type is "readonly",
--- "text", "number" or "action" (DELETE).
+-- Field rows are { key, label, value, type, choices } where type is
+-- "readonly", "text", "number", "choice" or "action" (DELETE); choice rows
+-- carry their {id,label} vocabulary.
 function Details.build(session, target)
   local fields = {}
-  local function add(key, label, value, kind)
+  local function add(key, label, value, kind, choices)
     fields[#fields + 1] = { key = key, label = label, value = value,
-                            type = kind or "text" }
+                            type = kind or "text", choices = choices }
   end
   if target and target.map then
     local def = target.map
@@ -72,9 +73,29 @@ function Details.build(session, target)
       add("type", "Type", (o.object_type or "OBJECT"):upper(), "readonly")
       if o.object_type == "item" then
         add("name", "Name", o.item or o.label or "", "readonly")
+        add("item", "Item", o.item or "", "text")
       else
         add("name", "Name", (o.label ~= nil and o.label ~= "") and o.label
           or o.sprite or "New Object", "text")
+        add("movement", "Walks",
+          (o.movement == "WALK") and "WALK" or "STAY", "choice",
+          Objects.MOVEMENT_CHOICES)
+        add("range", (o.movement == "WALK") and "Roams" or "Faces",
+          tostring(o.range or ""), "choice",
+          Objects.RANGE_CHOICES[(o.movement == "WALK") and "WALK" or "STAY"])
+        add("text", "Dialog", o.text or "", "text")
+        if o.pokemon ~= nil and o.pokemon ~= "" then
+          add("pokemon", "Pokemon", tostring(o.pokemon), "text")
+          add("level", "Level", tostring(o.level or 5), "number")
+        end
+        if o.item ~= nil and o.item ~= "" and o.item ~= "0" then
+          add("item", "Item", tostring(o.item), "text")
+        end
+        if o.isTrainer then
+          add("trainerClass", "Trainer class", o.trainerClass or "", "text")
+          add("trainerParty", "Party size", tostring(o.trainerParty or 1),
+            "number")
+        end
       end
       add("pos", "Pos", (o.x ~= nil and o.y ~= nil) and (o.x .. "," .. o.y) or "-",
         "readonly")
@@ -139,16 +160,16 @@ end
 -- Editing operations (called from Details.key / the input dispatcher)
 
 local function applyToWarp(session, d, key, value)
-  if not (d and d.warp) then return false end
+  if not (d and d.entity) then return false end
   if key == "destMap" then
     if value ~= "" and session.data and session.data.maps[value] then
-      return session:setWarpDest(d.warp, value)
+      return session:setWarpDest(d.entity, value)
     end
     return false
   elseif key == "destWarp" then
-    return session:setWarpDest(d.warp, nil, math.max(0, tonumber(value) or 0))
+    return session:setWarpDest(d.entity, nil, math.max(0, tonumber(value) or 0))
   elseif key == "label" then
-    return session:setWarpLabel(d.warp, value)
+    return session:setWarpLabel(d.entity, value)
   end
   return false
 end
@@ -162,20 +183,19 @@ local function applyToItem(d, key, value)
   return false
 end
 
+-- Object fields all write through Objects:setObjectProperty (validation,
+-- undo capture, live refresh happen there); "name" maps to the label setter.
 local function applyToObject(session, d, key, value)
-  if not (d and d.object) then return false end
-  if key == "name" then
-    return session:setObjectLabel(d.object, value)
-  end
-  return false
+  if not (d and d.entity) then return false end
+  return session:setObjectProperty(d.entity, key, value)
 end
 
 local function applyToSign(session, d, key, value)
-  if not (d and d.sign) then return false end
+  if not (d and d.entity) then return false end
   if key == "label" then
-    return session:setSignLabel(d.sign, value)
+    return session:setSignLabel(d.entity, value)
   elseif key == "text" then
-    d.sign.text = value
+    d.entity.text = value
     return true
   end
   return false
@@ -203,24 +223,56 @@ function Details.commit(session, d, fieldIdx, value)
     end
   elseif d.map then ok = applyToMap(session, d, f.key, value)
   else ok = applyToItem(d, f.key, value) end
-  if ok then f.value = value end
+  if ok then
+    if d.entity and d.entityType == "object" then
+      -- Live object state is authoritative (setObjectProperty validates and
+      -- may coerce), so rebuild every row — conditional fields like trainer /
+      -- pokemon / item must appear and disappear with the data.
+      local keep = math.min(d.index or 1, #d.fields)
+      d.fields = Details.build(session, d.target)
+      d.index = math.min(keep, #d.fields)
+    else
+      f.value = value
+    end
+  end
   return ok
 end
 
--- Nudges a numeric field (Left/Right).
+-- Cycles the active choice field by delta (wrapping) and commits the id.
+local function cycleChoice(session, d, delta)
+  local f = d and d.fields and d.fields[d.index]
+  if not f or f.type ~= "choice" or not f.choices then return end
+  local n = #f.choices
+  local cur = 1
+  for i, c in ipairs(f.choices) do
+    if c.id == f.value then cur = i break end
+  end
+  local nextId = f.choices[((cur - 1 + delta) % n) + 1].id
+  Details.commit(session, d, d.index, nextId)
+end
+
+-- Nudges a numeric field or cycles a choice (Left/Right).
 function Details.nudge(session, d, delta)
   local f = d and d.fields and d.fields[d.index]
-  if not f or f.type ~= "number" then return end
+  if not f then return end
+  if f.type == "choice" then
+    cycleChoice(session, d, delta)
+    return
+  end
+  if f.type ~= "number" then return end
   local v = math.max(0, (tonumber(f.value) or 0) + delta)
   Details.commit(session, d, d.index, tostring(v))
 end
 
--- Enter on the active field: starts a text edit, or runs an action.
+-- Enter on the active field: starts a text edit, cycles a choice, or runs an
+-- action.
 function Details.activate(ui, session, d)
   local f = d and d.fields and d.fields[d.index]
   if not f then return end
   if f.type == "text" then
     d.editing = { fieldIdx = d.index, buf = f.value }
+  elseif f.type == "choice" then
+    cycleChoice(session, d, 1)
   elseif f.type == "action" then
     if f.key == "encounters" then
       -- Open the encounter editor for this map.
@@ -367,6 +419,13 @@ function Details.draw(session, state, vw, vh, font)
     Text.label(font, Panel.fitText(font, f.label .. ":", w / 2 - 6, 2),
       x + Panel.PAD, ry, 2, { bg = Panel.CHIP_ROW, padX = 2, padY = 1 })
     local value = f.value
+    if f.type == "choice" and f.choices then
+      local lbl = tostring(f.value)
+      for _, c in ipairs(f.choices) do
+        if c.id == f.value then lbl = c.label break end
+      end
+      value = "< " .. lbl .. " >"
+    end
     if state.editing and state.editing.fieldIdx == i then
       value = state.editing.buf .. "_"
     end
@@ -387,7 +446,7 @@ function Details.draw(session, state, vw, vh, font)
   end
 
   local hint = state.editing and "Enter: ok  Esc: cancel"
-                    or "Up/Down: field  L/R: +-  Enter: edit  X: del  Esc: close"
+                    or "Up/Down: field  L/R: +- / choices  Enter: edit  X: del"
   Panel.drawHint(font, hint, x, y, w, h)
   Panel.resetColor()
 end
