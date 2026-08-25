@@ -295,9 +295,14 @@ function Details.activate(ui, session, d)
       local title = isWin and "AFTER-WIN TEXT"
         or ((d.entityType == "sign") and "SIGN TEXT" or "DIALOG")
       ui.details = nil
+      -- The after-win composer starts from the entity's OWN winText only:
+      -- a plain `isWin and ent.winText or ent.text` would fall through to
+      -- the intro line when no winText exists yet and bake it into the
+      -- after-win text on save.
+      local initial = isWin and (ent.winText or "") or (ent.text or "")
       DialogEditor.open(ui, session, {
         title = title,
-        text = (isWin and ent.winText or ent.text) or "",
+        text = initial,
         onSave = function(t)
           t = (t ~= "") and t or nil
           if isWin then ent.winText = t else ent.text = t end
@@ -545,7 +550,7 @@ function Details.draw(session, state, vw, vh, font)
       value = "" .. lbl .. ""
     end
     if state.editing and state.editing.fieldIdx == i then
-      value = state.editing.buf .. "_"
+      value = state.editing.buf .. ""
     end
     Text.label(font, Panel.fitText(font, value, w / 2 - 8, 2),
       x + w / 2, ry, 2, { bg = Panel.CHIP_VALUE, padX = 2, padY = 1 })

@@ -17,6 +17,7 @@ local Input = require("mods.mapamap.controllers.input")
 local Paint = require("mods.mapamap.domain.paint")
 local Objects = require("mods.mapamap.domain.objects")
 local Common = require("mods.mapamap.common")
+local Details = require("mods.mapamap.components.details")
 local EntityCreator = require("mods.mapamap.components.entity_creator")
 local T = require("mods.mapamap.tests.test_util")
 T.bind(Data, Session)
@@ -269,9 +270,16 @@ local function refreshObjectsDelegatesToGen2Rebuild()
     "the placement lands before the refresh")
   local Gen = require("mods.mapamap.engine.gen")
   local realIsGen2 = Gen.isGen2
-  local calls, world = {}, {
+  -- NOTE: two statements ON PURPOSE -- inside a combined `local calls, world
+  -- = {}, {...}` declaration the closure would capture the GLOBAL `calls`
+  -- (locals only come into scope after their statement), and every stub
+  -- invocation would die on a nil index under the engine's pcall.
+  local calls = {}
+  local world = {
     map = { id = s.mapId },
-    rebuildPeople = function(self) calls[#calls + 1] = self end,
+    rebuildPeople = function(self)
+      calls[#calls + 1] = self
+    end,
   }
   local realWorld, realOverworld = game.world, game.overworld
   Gen.isGen2 = function() return true end
@@ -297,6 +305,238 @@ local function refreshObjectsDelegatesToGen2Rebuild()
   game.overworld = realOverworld
 end
 
+-- A session with one laid-out EAST neighbor flush against the edited map's
+-- east edge, plus the neighborMaps entry undo routing needs.
+local function sessionWithEastNeighbor()
+  local s = freshSession()
+  local ox = s.def.width * Common.BLOCK_PX
+  local east = { width = 2, height = 3, tileset = s.def.tileset,
+    blocks = {}, objects = {}, warps = {}, signs = {} }
+  for i = 1, 2 * 3 do east.blocks[i] = 0 end
+  s.data.maps.EAST_NB = east
+  s.neighbors = { { id = "EAST_NB", def = east, ox = ox, oy = 0 } }
+  s.neighborMaps = { EAST_NB = { def = east } }
+  return s, east
+end
+
+-- World cell one cell into the east neighbor's grid (local (1, 1)).
+local function eastCell(s)
+  return s.def.width * 2 + 1, 1
+end
+
+-- targetAt resolves world cells to their owner: the edited map itself for
+-- in-body cells, the NEIGHBOR with LOCAL cells across the seam, nil on void.
+local function test_targetAtResolvesOwnerMaps()
+  local s, east = sessionWithEastNeighbor()
+  local own = s:targetAt(2, 2)
+  assert(own and not own.neighbor and own.def == s.def
+    and own.cellX == 2 and own.cellY == 2,
+    "in-body cells resolve to the edited map")
+  local wx, wy = eastCell(s)
+  local nb = s:targetAt(wx, wy)
+  assert(nb and nb.neighbor and nb.def == east and nb.mapId == "EAST_NB"
+    and nb.cellX == 1 and nb.cellY == 1,
+    "seam-crossing cells resolve to the neighbor with local coords")
+  assert(s:targetAt(500, 500) == nil, "void cells have no owner")
+end
+
+-- withTargetDef swaps def/mapId/cursor for the duration of fn only.
+local function test_withTargetDefSwapsAndRestores()
+  local s, east = sessionWithEastNeighbor()
+  local origDef, origMapId, oCx, oCy = s.def, s.mapId, s.cursorBx, s.cursorBy
+  local seen
+  s:withTargetDef({ def = east, mapId = "EAST_NB", cellX = 1, cellY = 2,
+    neighbor = true }, function(cx, cy)
+    seen = { def = s.def, mapId = s.mapId, cx = cx, cy = cy }
+    s.cursorBx, s.cursorBy = 40, 41   -- a placement mutating the cursor
+    return "ret"
+  end)
+  assert(seen.def == east and seen.mapId == "EAST_NB"
+    and seen.cx == 1 and seen.cy == 2, "fn runs under the swapped context")
+  assert(s.def == origDef and s.mapId == origMapId
+    and s.cursorBx == oCx and s.cursorBy == oCy,
+    "the context is restored afterwards")
+  -- Current-map targets pass straight through.
+  local via = s:withTargetDef({ def = s.def, mapId = s.mapId, cellX = 4,
+    cellY = 5, neighbor = false }, function(cx, cy) return cx + cy end)
+  assert(via == 9, "current-map targets call fn with their cells")
+end
+
+-- Placing an entity over the seam lands it on the NEIGHBOR's def with local
+-- coords, flags the map dirty and leaves the edited map untouched.
+local function test_paintPlacesEntitiesOnNeighborMaps()
+  local s, east = sessionWithEastNeighbor()
+  local Paint = require("mods.mapamap.domain.paint")
+  local ui = { hotbar = {}, selected = 1,
+    inventory = { items = {}, tab = 2, scroll = 1 } }
+  ui.hotbar[1] = { kind = "entity", entityType = "object",
+    create = { objectType = "npc", sprite = next(Data.sprites) } }
+  -- The real transform is unavailable headless; drive paintAt through its
+  -- cursor path by stubbing Coords.transform/toWorldCell.
+  local Coords = require("mods.mapamap.engine.coords")
+  local realTransform, realToWorld =
+    Coords.transform, Coords.toWorldCell
+  Coords.transform = function() return { kind = "flat" } end
+  Coords.toWorldCell = function(_, mx, my) return mx, my end
+  local wx, wy = eastCell(s)
+  local ok = Paint.paintAt(ui, { lastCellX = -1, lastCellY = -1 }, s, wx, wy)
+  Coords.transform, Coords.toWorldCell = realTransform, realToWorld
+
+  assert(ok, "the placement succeeds across the seam")
+  assert(#east.objects == 1 and #s.def.objects == 0,
+    "the entity landed on the neighbor's def, not the edited map")
+  local placed = east.objects[1]
+  assert(placed.cellX == nil and placed.x == 1 and placed.y == 1,
+    "stored in the neighbor's LOCAL walk-grid coords")
+  assert(s.neighborDirty.EAST_NB == true,
+    "the neighbor is flagged for diff persistence")
+  -- Erasing there removes it from the neighbor again.
+  Coords.transform = function() return { kind = "flat" } end
+  Coords.toWorldCell = function(_, mx, my) return mx, my end
+  Paint.eraseAt(ui, { lastCellX = -1, lastCellY = -1 }, s, wx, wy)
+  Coords.transform, Coords.toWorldCell = realTransform, realToWorld
+  assert(#east.objects == 0, "the neighbor erase removed the entity")
+end
+
+-- Dragging an entity across the seam re-homes it: lifted from the owner's
+-- list, re-indexed on the destination, both defs captured for undo.
+local function test_relocateEntityWorldCrossesSeams()
+  local s, east = sessionWithEastNeighbor()
+  local obj = assert(s:placeObjectSpec(2, 2,
+    { objectType = "npc", sprite = next(Data.sprites) }))
+  assert(s.undo:canUndo(), "placement captured an undo step")
+
+  local wx, wy = eastCell(s)
+  assert(s:relocateEntityWorld(obj, "object", wx, wy),
+    "cross-seam relocation succeeds")
+  assert(#s.def.objects == 0 and #east.objects == 1
+    and east.objects[1] == obj, "the entity moved between defs")
+  assert(obj.x == 1 and obj.y == 1,
+    "re-localized into the destination's walk grid")
+  assert(obj.index == 1, "fresh index on the destination map")
+  assert(s.neighborDirty.EAST_NB == true,
+    "the destination map is flagged dirty")
+
+  -- Ctrl+Z restores the pair: first step reverts the destination insert,
+  -- second step reverts the owner removal.  Undo restores deep copies, so
+  -- match by position rather than table identity.
+  s:restoreSnapshot("undo")
+  s:restoreSnapshot("undo")
+  local back = s.def.objects[1]
+  assert(#east.objects == 0 and #s.def.objects == 1 and back ~= nil
+    and back.x == 2 and back.y == 2,
+    "undo puts the entity back on its original map")
+end
+
+-- Swaps the camera transform for flat (mx,my) -> world-cell pass-through and
+-- returns the restore function.
+local function stubCoords()
+  local Coords = require("mods.mapamap.engine.coords")
+  local rt, rw = Coords.transform, Coords.toWorldCell
+  Coords.transform = function() return { kind = "flat" } end
+  Coords.toWorldCell = function(_, mx, my) return mx, my end
+  return function()
+    Coords.transform, Coords.toWorldCell = rt, rw
+  end
+end
+
+-- Painting a picked-up sign tool CLONES the message (same text) silently:
+-- no Details popup, on the edited map and across the seam alike.
+local function test_signPickPaintClonesMessageWithoutDetails()
+  local s, east = sessionWithEastNeighbor()
+  local unstub = stubCoords()
+  local Paint = require("mods.mapamap.domain.paint")
+  local ui = { hotbar = {}, selected = 1,
+    inventory = { items = {}, tab = 2, scroll = 1 } }
+  ui.hotbar[1] = { kind = "entity", entityType = "sign",
+    sign = { text = "KEEP OFF", label = "X", index = 3 } }
+
+  local ok = Paint.paintAt(ui, { lastCellX = -1, lastCellY = -1 }, s, 3, 3)
+  assert(ok, "the sign copy places")
+  assert(#s.def.signs == 1 and s.def.signs[1].text == "KEEP OFF",
+    "the clone carries the original message")
+  assert(ui.details == nil,
+    "placing a sign copy must not open the Details panel")
+
+  local wx, wy = eastCell(s)
+  ok = Paint.paintAt(ui, { lastCellX = -1, lastCellY = -1 }, s, wx, wy)
+  unstub()
+  assert(ok and #east.signs == 1 and east.signs[1].text == "KEEP OFF",
+    "seam-crossing clones keep the message too")
+  assert(s.neighborDirty.EAST_NB == true,
+    "the neighbor clone is flagged for persistence")
+end
+
+-- A right-click over ANY entity -- root object, sign, or a neighbor's
+-- entity -- opens its Details panel immediately at PRESS (dragging entities
+-- was removed; moving is the Details MOVE button).
+local function test_rmbClickOpensDetailsOnAnyEntity()
+  local s, east = sessionWithEastNeighbor()
+  local Input = require("mods.mapamap.controllers.input")
+  local unstub = stubCoords()
+  local obj = assert(s:placeObjectSpec(2, 2,
+    { objectType = "npc", sprite = next(Data.sprites) }))
+  local sign = assert(s:placeSignSpec(4, 4, { text = "read me" }))
+  -- Neighbor entity: eastCell resolves to local (1, 1).
+  local nbObj = { x = 1, y = 1, index = 1,
+    sprite = next(Data.sprites), object_type = "NPC" }
+  east.objects[#east.objects + 1] = nbObj
+
+  Input.reset()
+  Input.moveTarget, Input.warpDestPick = nil, false
+
+  -- Root-map object.
+  assert(Input.mousepressed(s, {}, 2, 2, 2), "RMB consumed")
+  assert(Input.details ~= nil and Input.details.entity == obj
+    and Input.details.entityType == "object" and not Input.details.readOnly,
+    "right-clicking a root object opens its Details")
+  Details.close(Input)
+
+  -- Root-map sign.
+  assert(Input.mousepressed(s, {}, 4, 4, 2))
+  assert(Input.details ~= nil and Input.details.entity == sign
+    and Input.details.entityType == "sign",
+    "right-clicking a sign opens its Details")
+  Details.close(Input)
+
+  -- Neighbor entity: read-only Details.
+  local wx, wy = eastCell(s)
+  assert(Input.mousepressed(s, {}, wx, wy, 2))
+  assert(Input.details ~= nil and Input.details.entity == nbObj
+    and Input.details.readOnly == true,
+    "right-clicking a neighbor's entity opens read-only Details")
+  Details.close(Input)
+
+  unstub()
+end
+
+-- Entity dragging is gone entirely: a right-drag neither moves an entity nor
+-- erases through it -- the press already opened Details and the world state
+-- is untouched however far the pointer travels before release.
+local function test_rmbDragDoesNotMoveEntities()
+  local s, east = sessionWithEastNeighbor()
+  local Input = require("mods.mapamap.controllers.input")
+  local unstub = stubCoords()
+  local obj = assert(s:placeObjectSpec(2, 2,
+    { objectType = "npc", sprite = next(Data.sprites) }))
+  Input.reset()
+  Input.moveTarget, Input.warpDestPick = nil, false
+
+  local wx, wy = eastCell(s)
+  assert(Input.mousepressed(s, {}, 2, 2, 2))
+  assert(Input.mousemoved(s, 40, 30))
+  -- The release has nothing pending under the press-opens model (returns
+  -- false); the state assertions below carry the guarantee.
+  Input.mousereleased(s, wx, wy, 2)
+  assert(#s.def.objects == 1 and s.def.objects[1] == obj,
+    "a right-drag never moves an entity")
+  assert(#east.objects == 0, "the neighbor stays untouched")
+  assert(Input.details ~= nil and Input.details.entity == obj,
+    "the Details panel opened at press and stays open")
+
+  unstub()
+end
+
 local suite = T.suite("MAPAMAP_ENTITY_EXTRAS", {
   cutTreeResolver,
   headbuttBlockResolverUsesCollisionTile,
@@ -309,6 +549,13 @@ local suite = T.suite("MAPAMAP_ENTITY_EXTRAS", {
   creatorBuildsNewToolShapes,
   creatorArrowKeysSurvive,
   refreshObjectsDelegatesToGen2Rebuild,
+  test_targetAtResolvesOwnerMaps,
+  test_withTargetDefSwapsAndRestores,
+  test_paintPlacesEntitiesOnNeighborMaps,
+  test_relocateEntityWorldCrossesSeams,
+  test_signPickPaintClonesMessageWithoutDetails,
+  test_rmbClickOpensDetailsOnAnyEntity,
+  test_rmbDragDoesNotMoveEntities,
 })
 
 suite.teardown = teardown

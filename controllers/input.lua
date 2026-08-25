@@ -1,4 +1,4 @@
--- Mouse/keyboard input for mapamap's direct-paint overlay.
+﻿-- Mouse/keyboard input for mapamap's direct-paint overlay.
 --
 -- While the overlay is active:
 --   * LMB drag  -> paint the selected block (or place the selected sprite)
@@ -42,6 +42,7 @@ local EncEditor = require("mods.mapamap.components.encounter_editor")
 local PartyEditor = require("mods.mapamap.components.party_editor")
 local DialogEditor = require("mods.mapamap.components.dialog_editor")
 local SlotPanel = require("mods.mapamap.components.slot_panel")
+local EntityCreator = require("mods.mapamap.components.entity_creator")
 
 -- Self-contained modal panels with a uniform contract, in priority order.
 -- MOUSE: component.mousepressed(ui, session, x, y, button) -> handled?;
@@ -738,13 +739,10 @@ function Input.mousepressed(session, game, mx, my, button)
       local t = Coords.transform(session.game)
       if t then
         local tx, ty = Coords.toWorldCell(t, mx, my)
-        local et = mt.entityType
-        if et == "warp" then
-          session:moveWarp(mt.entity, tx, ty)
-        elseif et == "object" then
-          session:moveObject(mt.entity, tx, ty)
-        elseif et == "sign" then
-          session:moveSign(mt.entity, tx, ty)
+        -- Follows the laid-out map owning the destination cell (a MOVE can
+        -- carry an entity across a seam).
+        if tx and ty then
+          session:relocateEntityWorld(mt.entity, mt.entityType, tx, ty)
         end
       end
       return true
@@ -756,8 +754,10 @@ function Input.mousepressed(session, game, mx, my, button)
     local pickedEntity, pickedType
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
-      session.cursorBx, session.cursorBy = tx, ty
-      pickedEntity, pickedType = session:entityAtWorld(tx, ty)
+      if tx and ty then
+        session.cursorBx, session.cursorBy = tx, ty
+        pickedEntity, pickedType = session:entityAtWorld(tx, ty)
+      end
     end
     if pickedEntity then
       session.selectedItem = pickedEntity
@@ -788,7 +788,9 @@ function Input.mousepressed(session, game, mx, my, button)
     -- must still place one block).
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
-      session.cursorBx, session.cursorBy = tx, ty
+      if tx and ty then
+        session.cursorBx, session.cursorBy = tx, ty
+      end
       Input.paintAt(session, mx, my)
     end
     return true
@@ -797,26 +799,21 @@ function Input.mousepressed(session, game, mx, my, button)
     local entity, entityType, mapId, mapDef
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
-      session.cursorBx, session.cursorBy = tx, ty
-      -- Neighbor-aware: entities on OTHER laid-out maps open read-only
-      -- Details instead of the erase/drag verbs (the session's mutators are
-      -- bound to the current map's def).
-      local ent, et, ownerDef = session:entityAtWorld(tx, ty)
-      if ent and ownerDef ~= session.def then
-        session.selectedItem = ent
-        EditorTools.deferEntityClick(et, ent, mx, my, true)
-        return true
-      end
-      entity, entityType = ent, et
-      if not entity then
+      if tx and ty then
+        session.cursorBx, session.cursorBy = tx, ty
+        -- ANY entity under a right-click opens its Details panel
+        -- immediately: neighbor entities open read-only.  Moving an entity
+        -- is the Details panel's MOVE button (the next LMB lands it), never
+        -- a right-drag.
+        local ent, et, ownerDef = session:entityAtWorld(tx, ty)
+        if ent then
+          Input.openDetails(session, { entity = ent, entityType = et,
+            readOnly = ownerDef ~= session.def })
+          return true
+        end
         mapId, mapDef = Neighbors.mapAt(session.def, session.neighbors,
           tx, ty)
       end
-    end
-    if entity then
-      session.selectedItem = entity
-      EditorTools.deferEntityClick(entityType, entity, mx, my)
-      return true
     end
     -- Right-click on a map body opens its Details (rename) on release.  A drag
     -- (detected in mousemoved) still erases; only a click opens the panel.
@@ -827,7 +824,9 @@ function Input.mousepressed(session, game, mx, my, button)
     EditorTools.armErase()
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
-      session.cursorBx, session.cursorBy = tx, ty
+      if tx and ty then
+        session.cursorBx, session.cursorBy = tx, ty
+      end
       Input.eraseAt(session, mx, my)
     end
     return true
@@ -854,32 +853,9 @@ function Input.mousereleased(session, mx, my, button)
     return true
   end
   if button == 2 then
-    -- Release a right-drag: relocate the entity to the cursor cell.
-    local ent = EditorTools.releaseEntityDrag()
-    if ent then
-      local t = Coords.transform(session.game)
-      if t then
-        local tx, ty = Coords.toWorldCell(t, mx, my)
-        local et = ent.entityType or ent.kind
-        if et == "warp" then
-          session:moveWarp(ent.entity, tx, ty)
-        elseif et == "object" then
-          session:moveObject(ent.entity, tx, ty)
-        elseif et == "sign" then
-          session:moveSign(ent.entity, tx, ty)
-        end
-      end
-      return true
-    end
-    -- Right-click (no drag) on a warp/object: open its Details panel.
-    local pc = EditorTools.takeEntityClick()
-    if pc then
-      local et = pc.entityType or pc.kind
-      Input.openDetails(session, { entity = pc.entity, entityType = et,
-        readOnly = pc.readOnly })
-      return true
-    end
-    -- Right-click (no drag) on a map body: open its Details to rename it.
+    -- Right-click on a map body opens its Details to rename it (the press
+    -- deferred the click-vs-erase decision; entity Details already opened
+    -- at press).
     local mc = EditorTools.takeMapClick()
     if mc then
       local def = (mc.mapId == session.mapId) and session.def
@@ -923,11 +899,6 @@ function Input.mousemoved(session, mx, my)
     -- pointer moves past the threshold, cancel the pending click and erase.
     if EditorTools.maybeEraseFromMap(mx, my) then
       Input.eraseAt(session, mx, my)
-    -- Right-drag over a warp/object: once past the threshold, arm the entity
-    -- drag and cancel the deferred Details click (the ghost draws at the
-    -- cursor cell until the release relocates the entity).
-    elseif EditorTools.maybeDragEntity(session, mx, my) then
-      -- armed; nothing to do until release
     elseif EditorTools.isErasing() then
       Input.eraseAt(session, mx, my)
     end
@@ -936,7 +907,9 @@ function Input.mousemoved(session, mx, my)
   local t = Coords.transform(session.game)
   if t then
     local tx, ty = Coords.toWorldCell(t, mx, my)
-    session.cursorBx, session.cursorBy = tx, ty
+    if tx and ty then
+      session.cursorBx, session.cursorBy = tx, ty
+    end
   end
   return true
 end
@@ -1095,7 +1068,9 @@ function Input.mouseHoveringSingleCellItem(session)
   local mx, my = love.mouse.getPosition()
   if not t then return false end
   local tx, ty = Coords.toWorldCell(t, mx, my)
-  session.cursorBx, session.cursorBy = tx, ty
+  if tx and ty then
+        session.cursorBx, session.cursorBy = tx, ty
+      end
   -- Resolve the laid-out map that owns this cell first: the session's *At
   -- lookups scan only the edited map's def, so hovering an entity on any
   -- other visible map answered nil and the cursor stayed block-snapped.

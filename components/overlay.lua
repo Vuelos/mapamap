@@ -21,7 +21,6 @@
 
 local Coords = require("mods.mapamap.engine.coords")
 local Input = require("mods.mapamap.controllers.input")
-local EditorTools = require("mods.mapamap.controllers.editor_tools")
 local Neighbors = require("mods.mapamap.domain.neighbors")
 local Borders = require("mods.mapamap.components.mapborders")
 local Item = require("mods.mapamap.components.item")
@@ -432,43 +431,6 @@ local function drawSigns(session, game)
   drawEntityMarkers(session, game, Overlay._visibleSigns, SIGN_STYLE)
 end
 
--- Ghost indicator while dragging a warp or object to a new cell (RMB drag).
--- Draws a translucent circle at the cursor cell so the user sees where the
--- entity will land on release.
-local function drawEntityDrag(session, game)
-  local drag = EditorTools.draggingEntity
-  if not drag then return end
-  local t = Coords.transform(game)
-  if not t then return end
-  local mx, my = love.mouse.getPosition()
-  local tx, ty = Coords.toWorldCell(t, mx, my)
-  if not tx then return end
-  -- Snap the ghost to the target cell center.
-  local cx, cy = markerCenter(t, drag.ox, drag.oy, tx, ty)
-  if not cx then return end
-  local r = 6 * t.sx
-  if drag.kind == "entity" and drag.entityType == "warp" then
-    love.graphics.setColor(0.2, 0.7, 1, 0.55)
-    love.graphics.circle("fill", cx, cy, r)
-    love.graphics.setColor(1, 1, 1, 0.6)
-    love.graphics.setLineWidth(1)
-    love.graphics.circle("line", cx, cy, r)
-  elseif drag.kind == "entity" and drag.entityType == "sign" then
-    love.graphics.setColor(1, 0.55, 0.2, 0.55)
-    love.graphics.circle("fill", cx, cy, r)
-    love.graphics.setColor(1, 1, 1, 0.6)
-    love.graphics.setLineWidth(1)
-    love.graphics.circle("line", cx, cy, r)
-  else
-    local s = 10 * t.sx
-    love.graphics.setColor(0.2, 0.9, 0.3, 0.5)
-    love.graphics.rectangle("fill", cx - s / 2, cy - s, s, s)
-    love.graphics.setColor(1, 1, 1, 0.6)
-    love.graphics.rectangle("line", cx - s / 2, cy - s, s, s)
-  end
-  love.graphics.setColor(1, 1, 1, 1)
-end
-
 -- Crosshair + hint while graphical destination-pick is armed (C).
 local function drawDestPick(session, game)
   if not Input.warpDestPick then return end
@@ -516,7 +478,6 @@ function Overlay.draw(session, game, viewport)
         drawObjects(session, game)
         drawSigns(session, game)
       end
-      drawEntityDrag(session, game)
       drawDestPick(session, game)
     end
     -- HUD panels on top, in open/close order so the picker and Details modal

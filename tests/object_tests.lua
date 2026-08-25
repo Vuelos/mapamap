@@ -416,9 +416,9 @@ function test_rmbNeighborEntityOpensReadOnlyDetails()
   -- The first cell of the neighbor (its local 0,0) sits just past the root's
   -- east edge.
   local wx = s.def.width * 2 * 16 + 8
+  -- Details open at PRESS under the press-opens model (dragging removed).
   assert(Input.mousepressed(s, game, wx, 8, 2),
     "RMB on a neighbor entity is consumed")
-  assert(Input.mousereleased(s, wx, 8, 2), "release consumed")
   Coords.transform = realTransform
   assert(Input.details ~= nil, "RMB opens Details for the neighbor entity")
   assert(Input.details.readOnly, "the panel is read-only")

@@ -1,16 +1,14 @@
 -- EditorTools: tool / brush state holder for the direct-paint overlay.
 --
 -- Owns the brush drag state (arm flags, dedupe anchors, right-button pending
--- click-vs-drag, entity drag ghost, void-stroke buffer) that input.lua used to
--- keep as a local.  input.lua stays a pure event translator: it resolves the
--- cursor and calls the small state mutations here, and the world operations
--- (paint / erase) route through apply()/erase() below into domain/paint.lua.
+-- map-body click, void-stroke buffer) that input.lua used to keep as a local.
+-- input.lua stays a pure event translator: it resolves the cursor and calls
+-- the small state mutations here, and the world operations (paint / erase)
+-- route through apply()/erase() below into domain/paint.lua.
 --
 -- The `brush` table is passed down to Paint.paintAt/eraseAt as the shared
 -- drag-state argument, so this module is the single owner of that state.
 
-local Coords = require("mods.mapamap.engine.coords")
-local Neighbors = require("mods.mapamap.domain.neighbors")
 local Paint = require("mods.mapamap.domain.paint")
 
 local Tools = {}
@@ -21,35 +19,27 @@ local Tools = {}
 Tools.brush = {
   painting = false,
   erasing = false,
-  draggingEntity = nil,   -- { kind = "warp"|"object"|"sign", entity = ..., ox, oy } during RMB drag
   paintingMap = nil,      -- mapId painted on this drag (blocks only)
   paintVoidCells = nil,   -- void cells buffered this drag, committed as one map on release
-  pendingMapClick = nil,  -- RMB press over a map body, pending click-vs-drag
-  pendingEntityClick = nil, -- RMB press over a warp/object/sign, deferred click-vs-drag
+  pendingMapClick = nil,  -- RMB press over a map body, pending rename-click vs erase-drag
   lastBlockX = nil,       -- last painted block coord (re-paint dedupe)
   lastBlockY = nil,
   lastCellX = nil,
   lastCellY = nil,
 }
 
--- Ghost entity drag (copy of brush.draggingEntity) for the overlay renderer.
-Tools.draggingEntity = nil
-
 -- Clears every brush field for a fresh session open.
 function Tools.reset()
   local b = Tools.brush
   b.painting = false
   b.erasing = false
-  b.draggingEntity = nil
   b.paintingMap = nil
   b.paintVoidCells = nil
   b.pendingMapClick = nil
-  b.pendingEntityClick = nil
   b.lastBlockX = nil
   b.lastBlockY = nil
   b.lastCellX = nil
   b.lastCellY = nil
-  Tools.draggingEntity = nil
 end
 
 -- Retire every held drag on a pointer cancel (focus loss / input recovery).
@@ -57,11 +47,8 @@ function Tools.cancelled()
   local b = Tools.brush
   b.painting = false
   b.erasing = false
-  b.draggingEntity = nil
-  b.pendingEntityClick = nil
   b.paintVoidCells = nil
   b.pendingMapClick = nil
-  Tools.draggingEntity = nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -89,19 +76,6 @@ function Tools.armErase()
   b.lastCellX, b.lastCellY = nil, nil
 end
 
--- RMB press over an entity: defer the click-vs-drag decision until the
--- pointer either stops (Details click) or moves past the threshold (drag).
--- `entityType` is "warp", "object", or "sign".  `readOnly` marks entities
--- living on another laid-out map: they open read-only Details and can never
--- become drags (the session's move ops are bound to the current map).
-function Tools.deferEntityClick(entityType, entity, mx, my, readOnly)
-  local b = Tools.brush
-  b.pendingEntityClick = { kind = "entity", entityType = entityType,
-    entity = entity, mx = mx, my = my, readOnly = readOnly or false }
-  b.erasing = false
-  b.painting = false
-end
-
 -- RMB press over a map body: defer rename-click vs erase-drag.
 function Tools.deferMapClick(mx, my, mapId)
   local b = Tools.brush
@@ -124,51 +98,6 @@ function Tools.maybeEraseFromMap(mx, my)
   return true
 end
 
--- A moved pointer over a pending entity click: once past the threshold the
--- press becomes an entity drag (ghost shown at the cursor cell).  Resolves the
--- map offset so the overlay draws the ghost at the right world position.
--- Returns true when the drag was armed.
-function Tools.maybeDragEntity(session, mx, my)
-  local b = Tools.brush
-  local pc = b.pendingEntityClick
-  if not pc then return false end
-  -- Read-only (other-map) entities never become drags: the release will open
-  -- their Details instead.
-  if pc.readOnly then return false end
-  local dx, dy = mx - pc.mx, my - pc.my
-  if dx * dx + dy * dy <= 25 then return false end
-  b.pendingEntityClick = nil
-  local t = Coords.transform(session.game)
-  local ox, oy = 0, 0
-  if t then
-    local tx, ty = Coords.toWorldCell(t, pc.mx, pc.my)
-    local mapId, mapDef, mapOx, mapOy =
-      Neighbors.mapAt(session.def, session.neighbors, tx, ty)
-    ox = mapOx or 0
-    oy = mapOy or 0
-  end
-  b.draggingEntity = { kind = pc.kind, entityType = pc.entityType, entity = pc.entity, ox = ox, oy = oy }
-  Tools.draggingEntity = b.draggingEntity
-  return true
-end
-
--- RMB release after an entity drag: return the dragged entity ({ kind, entity,
--- ox, oy }) and clear the ghost.  The caller relocates it to the cursor cell.
-function Tools.releaseEntityDrag()
-  local ent = Tools.brush.draggingEntity
-  Tools.brush.draggingEntity = nil
-  Tools.draggingEntity = nil
-  return ent
-end
-
--- RMB release over an entity with no drag: return the deferred click and clear
--- it so the caller opens its Details panel.
-function Tools.takeEntityClick()
-  local pc = Tools.brush.pendingEntityClick
-  Tools.brush.pendingEntityClick = nil
-  return pc
-end
-
 -- RMB release over a map body with no drag: return the deferred click.
 function Tools.takeMapClick()
   local pc = Tools.brush.pendingMapClick
@@ -176,15 +105,12 @@ function Tools.takeMapClick()
   return pc
 end
 
--- Settles the erase / drag arms when a physical release was lost (focus flip,
--- input recovery).  Clears both held-button brushes and any in-flight drag.
+-- Settles the erase arms when a physical release was lost (focus flip,
+-- input recovery).
 function Tools.stopErase()
   local b = Tools.brush
   b.erasing = false
-  b.draggingEntity = nil
-  b.pendingEntityClick = nil
   b.pendingMapClick = nil
-  Tools.draggingEntity = nil
 end
 
 -- True while the LMB paint brush is armed (the pointer is physically held).
