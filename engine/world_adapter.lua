@@ -334,19 +334,20 @@ end
 
 -- Applies saved patches and materializes grafts.
 function WorldAdapter.applySavedPatches(session)
-  WorldAdapter.registerTalkTexts(session)
   local Save = require("mods.mapamap.storage.patch_saver")
   local patch = Save.getPatches(session.mod)[session.mapId]
-  if not patch then return end
-  for key, value in pairs(patch) do
-    if key == "blocks" then
-      for i, v in ipairs(value) do
-        if session.def.blocks[i] ~= nil then session.def.blocks[i] = v end
+  if patch then
+    for key, value in pairs(patch) do
+      if key == "blocks" then
+        for i, v in ipairs(value) do
+          if session.def.blocks[i] ~= nil then session.def.blocks[i] = v end
+        end
+      elseif key ~= "id" then
+        session.def[key] = value
       end
-    elseif key ~= "id" then
-      session.def[key] = value
     end
   end
+  WorldAdapter.registerTalkTexts(session)
   Graft.invalidateTileset(session.data, session.tileset.id)
   Graft.materialize(session.data, session.tileset.id)
   session._thumbBundles = {}

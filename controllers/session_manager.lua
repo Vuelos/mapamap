@@ -307,7 +307,9 @@ function Manager.reconcile(game)
     local t = Coords.transform(game)
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
-      newSession.cursorBx, newSession.cursorBy = tx, ty
+      if tx and ty then
+        newSession.cursorBx, newSession.cursorBy = tx, ty
+      end
     end
   end
 end
@@ -337,6 +339,15 @@ function Manager.replayPatches(mod)
   local patches = mod.save:get("mapamap_patches", {})
   if next(patches) then
     Save.applyPatchesToData(patches, data)
+    -- Register talk handlers (blocker battles, healing, gift items) for every
+    -- patched map so they work immediately after a save load without waiting
+    -- for the overlay to open.
+    for mapId in pairs(patches) do
+      if data.maps[mapId] then
+        WorldAdapter.registerTalkTexts({
+          def = data.maps[mapId], mapId = mapId, game = game })
+      end
+    end
   end
   -- Replay whole new-map defs.
   local newMaps = mod.save:get("mapamap_new_maps", {})

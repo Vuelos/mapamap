@@ -323,6 +323,7 @@ function Objects:placeNewObject(cellX, cellY)
     trainerClass = nil,
     script = nil,
     item = nil,
+    text = "...",
     label = "New Object",
   })
   self.mapChanged = true
@@ -459,6 +460,10 @@ function Objects:placeObjectSpec(cellX, cellY, spec)
       obj.healing = true
       obj.label = obj.label or "Healer"
     end
+    if type(spec.prizeItem) == "string"
+        and self.data.items and self.data.items[spec.prizeItem] then
+      obj.prizeItem = spec.prizeItem
+    end
   elseif spec.objectType == "none" then
     -- Bare placement: no type-specific payload, just the label.
   end
@@ -471,6 +476,9 @@ function Objects:placeObjectSpec(cellX, cellY, spec)
   end
   local nextIndex = EditOps.nextIndex(self.def.objects or {})
   obj.index = nextIndex
+  if not obj.text or obj.text == "" then
+    obj.text = "..."
+  end
   if obj.blocker then
     -- Marker text: the key registerTalkTexts binds the wild-battle handler
     -- to.  Unique per placement so two blockers never share a handler.
@@ -516,6 +524,7 @@ function Objects:placeSprite(spriteId)
     trainerClass = nil,
     script = nil,
     item = nil,
+    text = "...",
   })
   self.mapChanged = true
   self:refreshLiveRenderers()

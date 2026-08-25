@@ -605,7 +605,11 @@ function EntityCreator.toolItem(session, d)
                         movement = movement, range = range,
                         text = dialog,
                         label = (vals.label and vals.label ~= "")
-                          and vals.label or nil } }
+                          and vals.label or nil,
+                        prizeItem = (type(vals.prizeItem) == "string"
+                          and vals.prizeItem ~= "NONE"
+                          and data.items and data.items[vals.prizeItem])
+                          and vals.prizeItem or nil } }
   elseif et == "pc" then
     local sprite, err = spriteOrError()
     if not sprite then return nil, err end
