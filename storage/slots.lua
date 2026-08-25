@@ -6,14 +6,13 @@
 -- overlay's Map Slots panel can store the current work under one name and
 -- swap between stored sets later (SessionManager.activateSlot).
 --
--- Slots are also files: export writes <mod>/export/<name>.lua next to the
--- mod source (shareable like map_edits/patches.lua), import reads such a
--- file back into the slot list.  Serialization uses the SaveSerializer
--- grammar; the absolute-path writer is shared with patch_saver's bulk
--- export.
+-- Slots are also files: export writes export/<name>.lua under the mod's own
+-- folder and import reads such a file back into the slot list -- through
+-- love.filesystem only, so the mod sandbox routes reads to the mod source
+-- and writes to its compat overlay (both real files on disk).  Serialization
+-- uses the SaveSerializer grammar, same as every other persisted bucket.
 
 local Common = require("mods.mapamap.common")
-local Save = require("mods.mapamap.storage.patch_saver")
 local Keys = require("mods.mapamap.storage.save_keys")
 local SaveSerializer = require("src.core.SaveSerializer")
 
@@ -129,34 +128,43 @@ function Slots.applyBuckets(mod, record)
   return true
 end
 
--- ------- export / import (mods/<mod>/export/<name>.lua)
+-- ------- export / import (export/<name>.lua under the mod's own folder)
+--
+-- Everything runs through love.filesystem so the mod sandbox routes it
+-- sanely: READS fall through to the mod's real source folder (repo-committed
+-- exports are importable), WRITES land in the mod's private compat overlay
+-- (mod_compat/<modId>/_own/export/ on the persistence volume) -- a real file
+-- on disk either way.  Raw io.open / absolute paths are sandbox-stripped and
+-- must not be used here.
 
 -- PhysFS-relative folder the export files live in.
 function Slots.dirRel(mod)
   return (mod.path or "mods/mapamap") .. "/export"
 end
 
--- Absolute filesystem path of one export file (nil when no game source
--- folder could be located, e.g. fused builds without getSource).
-function Slots.exportPath(mod, name)
-  local root = Save.sourceRootDir and Save.sourceRootDir()
-  if not root then return nil end
-  return root .. "/" .. Slots.dirRel(mod) .. "/" .. name .. ".lua"
+function Slots.fileRel(mod, name)
+  return Slots.dirRel(mod) .. "/" .. name .. ".lua"
 end
 
--- Writes the named slot to mods/<mod>/export/<name>.lua.  Returns the path,
+-- Relative location of one slot's export file (for status messages; there
+-- is no host path to expose inside the sandbox).
+function Slots.exportPath(mod, name)
+  return Slots.fileRel(mod, name)
+end
+
+-- Writes the named slot to export/<name>.lua.  Returns the relative path,
 -- or nil + an error message.
 function Slots.export(mod, name)
   local rec = Slots.get(mod, name)
   if not rec then return nil, "no slot named " .. tostring(name) end
-  local path = Slots.exportPath(mod, name)
-  if not path then return nil, "could not locate the game source folder" end
-  local ok, err = pcall(Save.writeSourceFile, path, SaveSerializer.encode(rec))
-  if not ok then return nil, tostring(err) end
-  return path
+  local rel = Slots.fileRel(mod, name)
+  local ok = love.filesystem.write(rel, SaveSerializer.encode(rec))
+  if not ok then return nil, "could not write " .. rel end
+  return rel
 end
 
--- File names (.lua) available in the export folder, sorted.
+-- File names (.lua) available for import: the compat overlay plus the mod's
+-- own source folder, merged and sorted.
 function Slots.files(mod)
   local items = love.filesystem.getDirectoryItems(Slots.dirRel(mod)) or {}
   local out = {}
@@ -173,19 +181,11 @@ function Slots.nameForFile(fileName)
 end
 
 -- Reads one export file back into the slot list under its file name.
--- love.filesystem reaches the game source on normal runs; the raw-io path
--- covers environments where only the absolute location is readable.
 -- Returns the imported slot name, or nil + an error message.
 function Slots.import(mod, fileName)
-  local rel = Slots.dirRel(mod) .. "/" .. fileName
-  local raw = love.filesystem and love.filesystem.read
-    and love.filesystem.read(rel)
-  if not raw then
-    local path = Slots.exportPath(mod, Slots.nameForFile(fileName))
-    local f = path and io.open(path, "rb")
-    if f then raw = f:read("*a"); f:close() end
-  end
-  if not raw then return nil, "export/" .. tostring(fileName) .. " not found" end
+  local rel = Slots.fileRel(mod, Slots.nameForFile(fileName))
+  local raw = love.filesystem.read(rel)
+  if not raw then return nil, tostring(fileName) .. " not found" end
   local rec, err = SaveSerializer.decode(raw)
   if not rec then return nil, tostring(err) end
   local name = Slots.nameForFile(fileName)

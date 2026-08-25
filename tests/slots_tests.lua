@@ -111,19 +111,9 @@ local function test_nextNameSkipsTaken()
     "the collision fallback keeps the timestamp format")
 end
 
--- Export round trip against the REAL filesystem: point sourceRoot() at a
--- temp folder, export, wipe the live buckets, re-import.
+-- Export/import round trip through the (stub) sandboxed filesystem: export
+-- writes export/<name>.lua under the mod's own folder, import reads it back.
 local function test_exportImportRoundtrip()
-  local fs = love.filesystem
-  local hadSource = fs.getSource ~= nil
-  local origSource = fs.getSource
-  local tmpRoot = (os.getenv("TEMP") or os.getenv("TMP") or ".")
-    .. "/opencode/mapamap_slot_tests_" .. tostring(os.time())
-  fs.getSource = function() return tmpRoot end
-  local function cleanup()
-    if hadSource then fs.getSource = origSource else fs.getSource = nil end
-  end
-
   local mod = TestUtil.makeMod()
   mod.path = "mods/mapamap"
   -- Seed the live edit-set so the exported slot carries real content.
@@ -131,15 +121,14 @@ local function test_exportImportRoundtrip()
   mod.save:set(Keys.NEW_MAPS, Common.deepCopy(sampleRecord().newMaps))
   Slots.store(mod, "alpha")
 
-  local path, err = Slots.export(mod, "alpha")
-  assert(path, "export succeeds: " .. tostring(err))
-  local f = io.open(path, "rb")
-  assert(f, "the export file exists on disk at " .. path)
-  local raw = f:read("*a")
-  f:close()
-  assert(raw:find("mapamap-slot", 1, true), "the file embeds the format tag")
+  local rel, err = Slots.export(mod, "alpha")
+  assert(rel == "mods/mapamap/export/alpha.lua",
+    "export reports the relative file location: " .. tostring(err))
+  local raw = love.filesystem.read(rel)
+  assert(raw and raw:find("mapamap-slot", 1, true),
+    "the export file is readable back through the same surface")
 
-  -- A missing slot / missing source root fail with messages, never crash.
+  -- A missing slot fails with a message, never a crash.
   local nope, noErr = Slots.export(mod, "ghost")
   assert(nope == nil and noErr, "exporting a missing slot fails cleanly")
 
@@ -156,8 +145,7 @@ local function test_exportImportRoundtrip()
   local bad = Slots.import(mod, "does_not_exist.lua")
   assert(bad == nil, "importing a missing file fails cleanly")
 
-  pcall(os.remove, path)
-  cleanup()
+  love.filesystem.remove(rel)
 end
 
 local function test_filesListsLuaOnly()

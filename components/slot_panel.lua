@@ -155,8 +155,12 @@ function SlotPanel.press(ui, session, id)
     if not ui.slotSel then msg(ui, "select a slot to load") return end
     -- Resolved lazily so tests can stub the session manager before firing.
     local SM = require("mods.mapamap.controllers.session_manager")
-    local ok, err = SM.activateSlot(mod, ui.slotSel)
-    msg(ui, ok and ("loaded '" .. ui.slotSel .. "'") or tostring(err))
+    -- Captured BEFORE activating: activation may reopen the session, and a
+    -- reopen resets the controller state (slotSel included), so the field
+    -- is gone by the time activateSlot returns.
+    local name = ui.slotSel
+    local ok, err = SM.activateSlot(mod, name)
+    msg(ui, ok and ("loaded '" .. tostring(name) .. "'") or tostring(err))
   elseif id == "rename" then
     if not ui.slotSel then msg(ui, "select a slot to rename") return end
     ui.slotRename = ui.slotSel
