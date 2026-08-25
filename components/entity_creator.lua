@@ -139,7 +139,7 @@ function EntityCreator.build(session, entityType)
     add("text", "Text", "...", "action")
   elseif entityType == "warp" then
     add("destMap", "Dest map", session.mapId or "", "dropdown", "maps")
-    add("destWarp", "Warp #", "0", "number")
+    add("destWarp", "Warp #", "1", "number")
     add("newmap", "New map", "", "action")
   elseif entityType == "pc" then
     add("label", "Name", "PC", "text")
@@ -517,7 +517,7 @@ function EntityCreator.applyEdit(ui, session, d)
     local v = f.value
     local ok
     -- Shop items are managed as a list; skip the form fields that represent
-    -- the picker and display rows â€” they're written from d.shopItems below.
+    -- the picker and display rows Ã¢â‚¬â€ they're written from d.shopItems below.
     if f.key == "addItem" or f.key == "shopItems" then
       ok = true
     elseif et == "object" then
@@ -715,9 +715,19 @@ sight = math.max(0,
     if not (vals.destMap and data.maps and data.maps[vals.destMap]) then
       return nil, "pick a destination map"
     end
+    -- The engine lands you on the destination's warps[#+1]: a number past
+    -- the list would crash on take.  Minted indoor rooms seed warp #0.
+    local count = data.maps[vals.destMap].warps
+      and #data.maps[vals.destMap].warps or 0
+    -- The engine indexes the destination's warp list 1-BASED.
+    local dw = math.floor(tonumber(vals.destWarp) or 1)
+    if dw < 1 or dw > count then
+      return nil, "warp #" .. tostring(dw) .. " doesn't exist in "
+        .. vals.destMap .. " (1.." .. count .. ")"
+    end
     return { kind = "entity", entityType = "warp",
              create = { destMap = vals.destMap,
-                        destWarp = math.max(0, tonumber(vals.destWarp) or 0) } }
+                        destWarp = dw } }
   elseif et == "boulder" then
     return { kind = "entity", entityType = "object",
              create = { objectType = "boulder" } }
@@ -869,7 +879,7 @@ local function createNewDestMap(ui, session, d)
   end
   for _, f in ipairs(d.fields or {}) do
     if f.key == "destMap" then f.value = newId end
-    if f.key == "destWarp" then f.value = "0" end
+    if f.key == "destWarp" then f.value = "1" end
   end
   d.error = nil
   d.status = "warp target: " .. tostring(newId)

@@ -402,13 +402,14 @@ end
 
 -- Right-clicking an entity on ANOTHER laid-out map opens read-only Details:
 -- the hover markers are neighbor-aware, so the pick must be too.
-function test_rmbNeighborEntityOpensReadOnlyDetails()
+function test_rmbNeighborEntityOpensEditableDetails()
   local s = freshSession()
   resetInput()
   local east = { width = 2, height = 2, tileset = s.def.tileset,
     blocks = { 1, 1, 1, 1 },
     objects = { { x = 0, y = 0, sprite = "LASS", index = 1 } } }
   s.neighbors = { { id = "EAST", def = east, ox = s.def.width * 32, oy = 0 } }
+  s.neighborMaps = { EAST = { def = east } }
   local realTransform = Coords.transform
   Coords.transform = function()
     return { camx = 0, camy = 0, sx = 1, sy = 1, wox = 0, woy = 0 }
@@ -421,9 +422,14 @@ function test_rmbNeighborEntityOpensReadOnlyDetails()
     "RMB on a neighbor entity is consumed")
   Coords.transform = realTransform
   assert(Input.details ~= nil, "RMB opens Details for the neighbor entity")
-  assert(Input.details.readOnly, "the panel is read-only")
+  -- Neighbor entities are FULLY editable now: same strip, same verbs.
+  assert(not Input.details.readOnly, "the panel is not read-only")
+  local buttons = Details.buttons(Input.details)
+  assert(#buttons == 3, "MOVE / EDIT / REMOVE all offered")
   Input.keypressed(s, "x")
-  assert(#east.objects == 1, "read-only delete leaves the other map intact")
+  assert(#east.objects == 0, "X deletes the neighbor entity off its map")
+  assert(s.neighborDirty and s.neighborDirty.EAST,
+    "the owner map is flagged for persistence")
   Input.keypressed(s, "escape")
   assert(Input.details == nil, "Escape closes it")
 end
@@ -459,7 +465,7 @@ return {
     "test_objectCellLoadsCopyTool",
     "test_creatorToolCellKeepsCreatePayload",
     "test_objectTemplateCellLoadsNewTool",
-    "test_rmbNeighborEntityOpensReadOnlyDetails",
+    "test_rmbNeighborEntityOpensEditableDetails",
     "test_lmbNeighborEntityPicksUpCopy",
     "test_inventoryRmbOnObjectOpensDetails",
     "test_detailsObjectBuildFields",

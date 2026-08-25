@@ -595,7 +595,8 @@ function Objects:removeObject(obj)
       return true
     end
   end
-  return false
+  -- Not on the edited map: it may live on a laid-out neighbor.
+  return self:removeEntityFromOwner(obj, "objects")
 end
 
 -- Removes an NPC/object at the cursor cell. Returns true when one was found.

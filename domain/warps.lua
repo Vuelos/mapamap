@@ -1,6 +1,8 @@
 -- Warp editing operations for the mapamap overlay.  Mixed into Session so
 -- every method receives the session as `self`.
 
+local WorldAdapter = require("mods.mapamap.engine.world_adapter")
+
 local Warps = {}
 
 -- Bounds check for a walk-grid cell against a map def.
@@ -52,9 +54,10 @@ function Warps.placeWarp(self, cellX, cellY, destMap, destWarp)
   if self.undo then self.undo:capture(self.def) end
   self.def.warps = self.def.warps or {}
   local w = { x = cellX, y = cellY,
-              destMap = destMap or self.mapId, destWarp = destWarp or 0 }
+              destMap = destMap or self.mapId, destWarp = destWarp or 1 }
   table.insert(self.def.warps, w)
   self.mapChanged = true
+  WorldAdapter.refreshWarps(self)
   return w
 end
 
@@ -71,12 +74,23 @@ function Warps.moveWarp(self, warp, cellX, cellY)
 end
 
 -- Re-points a warp's destination (destMap and/or destWarp, 0-based).
+-- destWarp is VALIDATED against the target map's warp list: the engine
+-- lands you on def.warps[destWarp + 1], so an out-of-range number would
+-- crash on take.  Returns false when the number doesn't exist.
 function Warps.setWarpDest(self, warp, destMap, destWarp)
   if not warp then return false end
   if self.undo then self.undo:capture(self.def) end
   if destMap then warp.destMap = destMap end
-  if destWarp ~= nil then warp.destWarp = destWarp end
-  self.mapChanged = true
+  if destWarp ~= nil then
+    -- The engine indexes the destination list 1-BASED (Warp.resolve /
+    -- World.takeWarp both do warps[n]), so valid numbers are 1..count.
+    local n = math.floor(tonumber(destWarp) or 1)
+    local tdef = self.data.maps and self.data.maps[warp.destMap]
+    local count = tdef and tdef.warps and #tdef.warps or 0
+    if n < 1 or n > count then return false end
+    warp.destWarp = n
+  end
+  WorldAdapter.refreshWarps(self)
   return true
 end
 
@@ -97,10 +111,12 @@ function Warps.removeWarp(self, warp)
       if self.undo then self.undo:capture(self.def) end
       table.remove(list, i)
       self.mapChanged = true
+      WorldAdapter.refreshWarps(self)
       return true
     end
   end
-  return false
+  -- Not on the edited map: it may live on a laid-out neighbor.
+  return self:removeEntityFromOwner(warp, "warps")
 end
 
 -- Graphically wires `warp` to land on `destMapId` at `cellX, cellY` (walk-grid
@@ -128,14 +144,15 @@ function Warps.connectWarpToCell(self, warp, destMapId, cellX, cellY)
   end
   local srcIdx = self:warpIndex(warp) or 1
   warp.destMap = destMapId
-  warp.destWarp = idx - 1
+  warp.destWarp = idx
   destWarp.destMap = self.mapId
-  destWarp.destWarp = srcIdx - 1
+  destWarp.destWarp = srcIdx
   if destDef ~= self.def then
     self.neighborDirty = self.neighborDirty or {}
     self.neighborDirty[destMapId] = true
   end
   self.mapChanged = true
+  WorldAdapter.refreshWarps(self)
   return true
 end
 
@@ -144,7 +161,8 @@ end
 -- `def` is the destination map's def (nil for unknown ids); ox/oy are its
 -- world-pixel offsets when it is one of the LAID-OUT maps (root or a
 -- neighbor -- laidOut=true), else nil; the cell is the destination warp
--- entry's own position (warp # is 0-based), falling back to the map center.
+-- entry's own position (warp # is 1-BASED -- both engines index
+-- warps[destWarp] directly), falling back to the map center.
 function Warps.destPreview(self, destMap, destWarp)
   if not destMap then return nil end
   local def = self.data.maps and self.data.maps[destMap]
@@ -157,7 +175,7 @@ function Warps.destPreview(self, destMap, destWarp)
       if nb.id == destMap then ox, oy, laidOut = nb.ox, nb.oy, true break end
     end
   end
-  local idx = math.floor(tonumber(destWarp) or 0) + 1
+  local idx = math.floor(tonumber(destWarp) or 1)
   local target = def.warps and def.warps[idx] or nil
   local cellX, cellY
   if target then
@@ -170,7 +188,7 @@ function Warps.destPreview(self, destMap, destWarp)
     def = def,
     ox = ox, oy = oy, laidOut = laidOut and true or false,
     cellX = cellX, cellY = cellY,
-    label = tostring(destMap) .. " #" .. tostring(math.floor(tonumber(destWarp) or 0)),
+    label = tostring(destMap) .. " #" .. tostring(math.floor(tonumber(destWarp) or 1)),
   }
 end
 

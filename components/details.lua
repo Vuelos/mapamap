@@ -272,7 +272,10 @@ function Details.nudge(session, d, delta)
     return
   end
   if f.type ~= "number" then return end
-  local v = math.max(0, (tonumber(f.value) or 0) + delta)
+  -- Warp numbers are 1-based (the engine indexes the destination's
+  -- warp list directly), so never nudge below 1.
+  local floor = (f.key == "destWarp") and 1 or 0
+  local v = math.max(floor, (tonumber(f.value) or 0) + delta)
   Details.commit(session, d, d.index, tostring(v))
 end
 

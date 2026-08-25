@@ -20,6 +20,7 @@ local Common = require("mods.mapamap.common")
 local Details = require("mods.mapamap.components.details")
 local EntityCreator = require("mods.mapamap.components.entity_creator")
 local Warps = require("mods.mapamap.domain.warps")
+local WarpPreview = require("mods.mapamap.components.warp_preview")
 local T = require("mods.mapamap.tests.test_util")
 T.bind(Data, Session)
 
@@ -500,15 +501,32 @@ local function test_rmbClickOpensDetailsOnAnyEntity()
     "right-clicking a sign opens its Details")
   Details.close(Input)
 
-  -- Neighbor entity: read-only Details.
+  -- Neighbor entity: FULLY editable now, identical to same-map ones.
   local wx, wy = eastCell(s)
   assert(Input.mousepressed(s, {}, wx, wy, 2))
   assert(Input.details ~= nil and Input.details.entity == nbObj
-    and Input.details.readOnly == true,
-    "right-clicking a neighbor's entity opens read-only Details")
+    and not Input.details.readOnly,
+    "right-clicking a neighbor's entity opens editable Details")
+  assert(#Details.buttons(Input.details) == 3,
+    "MOVE / EDIT / REMOVE are offered for neighbor entities")
   Details.close(Input)
 
   unstub()
+end
+
+-- Removing a NEIGHBOR entity lifts it off its owner map: the kind-specific
+-- remove ops fall back to an owner-aware scan, flagging + refreshing there;
+-- undo restores it on the owner (routed by snap.mapId).
+local function test_removeNeighborEntityLiftsItOff()
+  local s, east = sessionWithEastNeighbor()
+  local nbObj = { x = 1, y = 1, index = 1,
+    sprite = next(Data.sprites), object_type = "NPC" }
+  east.objects[#east.objects + 1] = nbObj
+  assert(s:removeObject(nbObj), "removal succeeds across the seam")
+  assert(#east.objects == 0, "the entity is gone from the owner map")
+  assert(s.neighborDirty.EAST_NB == true, "the owner map is flagged dirty")
+  s:restoreSnapshot("undo")
+  assert(#east.objects == 1, "undo puts the entity back on its owner map")
 end
 
 -- Entity dragging is gone entirely: a right-drag neither moves an entity nor
@@ -538,8 +556,9 @@ local function test_rmbDragDoesNotMoveEntities()
   unstub()
 end
 
--- The warp form's NEW MAP row mints a fresh map on a free edge and re-points
--- the draft's destination at it; CREATE then arms a warp leading there.
+-- The warp form's NEW MAP row mints a fresh INDOOR destination: an
+-- isolated room (no connections to anything) tracked for persistence, with
+-- the draft's destination re-pointed at it; CREATE arms a warp leading in.
 local function test_warpCreatorNewMapDestination()
   local s = freshSession()
   local ui = { hotbar = {}, selected = 1,
@@ -550,23 +569,34 @@ local function test_warpCreatorNewMapDestination()
   for _ in pairs(Data.maps) do before = before + 1 end
 
   assert(EntityCreator.createNewDestMap(ui, s, d),
-    "NEW MAP succeeds while an edge is free")
+    "NEW MAP succeeds")
   local newId
   for _, f in ipairs(d.fields) do
     if f.key == "destMap" then newId = f.value end
-    if f.key == "destWarp" then assert(f.value == "0", "warp # resets to 0") end
+    if f.key == "destWarp" then assert(f.value == "1", "warp # resets to 1") end
   end
   assert(newId and Data.maps[newId], "a fresh map def was created")
-  assert(newId ~= s.mapId, "the destination is not the edited map")
+  assert(newId:find("_IND", 1, true), "the id marks it as an indoor room")
+  local def = Data.maps[newId]
+  assert(def.width == 10 and def.height == 9,
+    "interior footprint is 10x9 blocks")
+  assert(next(def.connections or {}) == nil,
+    "indoor rooms connect to NOTHING (warp-only access)")
+  -- Walkable interior + wall ring.
+  local corner = def.blocks[1]
+  local cxm, cym = math.floor(def.width / 2), math.floor(def.height / 2)
+  local center = def.blocks[cym * def.width + cxm + 1]
+  assert(center ~= nil and center ~= corner,
+    "the interior is floor, not a solid border box")
+  -- Seeded arrival warp #0 pointing back at the edited map: the engine
+  -- lands you on warps[#+1], which CRASHED when the room had none.
+  assert(#def.warps == 1 and def.warps[1].destMap == s.mapId
+    and def.warps[1].destWarp == 1
+    and math.floor(def.width / 2) == def.warps[1].x,
+    "warp #1 is the seeded arrival mat back to the edited map")
   local after = 0
   for _ in pairs(Data.maps) do after = after + 1 end
   assert(after == before + 1, "exactly one map was minted")
-  -- Laid out + walkable: connected to the edited map.
-  local wired
-  for _, c in pairs(Data.maps[newId].connections or {}) do
-    if c and (c.mapGroup or c.id or true) then wired = true break end
-  end
-  assert(wired ~= nil, "the destination carries a connection entry")
   assert(s._newMaps and s._newMaps[newId] ~= nil,
     "the destination is tracked for persistence")
   -- A second press mints ANOTHER map, not a duplicate id.
@@ -588,30 +618,130 @@ local function test_warpCreatorNewMapDestination()
   s.data.maps[secondId] = nil
 end
 
+-- Warp # input is validated against the destination's warp list: the
+-- creator refuses to arm a tool pointing past the end, and setWarpDest
+-- rejects out-of-range moves (the engine would crash on take).
+local function test_warpNumberInputValidated()
+  local s, east = sessionWithEastNeighbor()
+  east.warps = { { x = 0, y = 0 } }   -- exactly one warp: only #0 exists
+  local ui = { hotbar = {}, selected = 1,
+    inventory = { items = {}, tab = 2, scroll = 1 } }
+  EntityCreator.open(ui, s, "warp")
+  local d = ui.entityCreator
+  for _, f in ipairs(d.fields) do
+    if f.key == "destMap" then f.value = "EAST_NB" end
+    if f.key == "destWarp" then f.value = "5" end
+  end
+  assert(not EntityCreator.commit(ui, s), "out-of-range warp # is refused")
+  assert(d.error and d.error:find("doesn't exist", 1, true),
+    "the error names the missing warp number")
+  for _, f in ipairs(d.fields) do
+    if f.key == "destWarp" then f.value = "1" end
+  end
+  d.error = nil
+  assert(EntityCreator.commit(ui, s), "warp #1 arms the tool")
+
+  -- Details-side validation via setWarpDest.
+  local w = assert(s:placeWarp(2, 2, "EAST_NB", 1))
+  assert(not s:setWarpDest(w, nil, 3), "past-the-end numbers are rejected")
+  assert(s:setWarpDest(w, nil, 1), "in-range numbers apply")
+end
+
+-- The destination preview panel is interactive: LMB on an empty tile mints
+-- a destination warp (selected as arrival), LMB on a marker selects it,
+-- RMB removes it.
+local function test_warpPreviewPanelInteractive()
+  local s = freshSession()
+  local Input_ = Input
+  EntityCreator.open(Input_, s, "warp")
+  assert(EntityCreator.createNewDestMap(Input_, s, Input_.entityCreator))
+  local destMap
+  for _, f in ipairs(Input_.entityCreator.fields) do
+    if f.key == "destMap" then destMap = f.value end
+  end
+  local def = Data.maps[destMap]
+  assert(#def.warps == 1, "the seeded arrival mat is warp #0")
+
+  -- Find an empty tile in the panel by scanning probe points.
+  local Overlay = require("mods.mapamap.components.overlay")
+  local cellHit, dm
+  for mx = 0, 640, 4 do
+    for my = 0, 576, 4 do
+      local h2, d2 = WarpPreview.interact(Input_, s, mx, my)
+      if h2 and h2.kind == "cell" then cellHit, dm = h2, d2 break end
+    end
+    if cellHit then break end
+  end
+  assert(cellHit and dm == destMap, "an empty tile is clickable")
+  assert(WarpPreview.applyClick(Input_, s, cellHit, dm, 1),
+    "LMB creates a destination warp")
+  assert(#def.warps == 2, "a second warp exists in the room")
+  assert(def.warps[2].destMap == s.mapId,
+    "new destination warps point back at the edited map by default")
+  local dwVal
+  for _, f in ipairs(Input_.entityCreator.fields) do
+    if f.key == "destWarp" then dwVal = f.value end
+  end
+  assert(dwVal == "2", "the minted warp becomes the selected arrival")
+
+  -- Clicking the seeded marker re-selects #0; RMB removes the added one.
+  local markerHit
+  for mx = 0, 640, 2 do
+    for my = 0, 576, 2 do
+      local h2, d2 = WarpPreview.interact(Input_, s, mx, my)
+      if h2 and h2.kind == "warp" and h2.index == 1 then
+        markerHit, dm = h2, d2 break
+      end
+    end
+    if markerHit then break end
+  end
+  assert(markerHit, "the seeded marker is clickable")
+  assert(WarpPreview.applyClick(Input_, s, markerHit, dm, 1))
+  for _, f in ipairs(Input_.entityCreator.fields) do
+    if f.key == "destWarp" then assert(f.value == "1") end
+  end
+
+  Data.maps[destMap] = nil
+end
 -- Warps.destPreview resolves where a warp points: laid-out root/neighbor
 -- maps with their offsets, the warp # cell, and unknown maps as unresolved.
 local function test_destPreviewResolvesDestinations()
   local s, east = sessionWithEastNeighbor()
   -- Root map: warp #1 (index 1) sits at its own x/y.
-  s.def.warps = { { x = 3, y = 4, destMap = "EAST_NB", destWarp = 0 } }
-  local root = Warps.destPreview(s, s.mapId, 0)
+  s.def.warps = { { x = 3, y = 4, destMap = "EAST_NB", destWarp = 1 } }
+  local root = Warps.destPreview(s, s.mapId, 1)
   assert(root and root.laidOut and root.def == s.def and root.ox == 0,
     "root destinations resolve at offset 0,0")
   assert(root.cellX == 3 and root.cellY == 4,
     "the cell comes from the destination warp entry")
   -- Neighbor destination by id.
   east.warps = { { x = 0, y = 2 } }
-  local nb = Warps.destPreview(s, "EAST_NB", 0)
+  local nb = Warps.destPreview(s, "EAST_NB", 1)
   assert(nb and nb.laidOut and nb.def == east and nb.cellX == 0
     and nb.cellY == 2, "neighbor destinations resolve with their offsets")
   -- Missing warp # falls back to the map center.
   east.warps = {}
-  local center = Warps.destPreview(s, "EAST_NB", 5)
+  local center = Warps.destPreview(s, "EAST_NB", 9)
   assert(center.cellX == 1 and center.cellY == 1,
     "an out-of-range warp # previews the map center")
   -- Unknown ids resolve nothing.
-  assert(Warps.destPreview(s, "NOWHERE", 0) == nil, "unknown ids are nil")
-  assert(Warps.destPreview(s, nil, 0) == nil, "nil ids are nil")
+  assert(Warps.destPreview(s, "NOWHERE", 1) == nil, "unknown ids are nil")
+  assert(Warps.destPreview(s, nil, 1) == nil, "nil ids are nil")
+end
+
+-- Placed warps work IMMEDIATELY: the live Map instances' warp lookup is
+-- rebuilt on every mutation (they snapshot def.warps once at construction),
+-- so no leave-and-reenter is needed.
+local function test_placedWarpsAreLiveOnTheRuntimeMap()
+  local s = freshSession()
+  local w = assert(s:placeWarp(6, 6, "EAST_NB", 1))
+  assert(s.map and s.map.warpAt, "the session map carries a warp index")
+  local key = 6 * s.map.widthCells + 6
+  assert(s.map.warpAt[key] ~= nil and s.map.warpAt[key].def == w,
+    "the placed warp is in the live map's lookup right away")
+  -- Removing it clears the entry again.
+  assert(s:removeWarp(w))
+  assert(s.map.warpAt[key] == nil, "removal updates the live lookup too")
 end
 
 local suite = T.suite("MAPAMAP_ENTITY_EXTRAS", {
@@ -633,7 +763,11 @@ local suite = T.suite("MAPAMAP_ENTITY_EXTRAS", {
   test_signPickPaintClonesMessageWithoutDetails,
   test_rmbClickOpensDetailsOnAnyEntity,
   test_rmbDragDoesNotMoveEntities,
+  test_removeNeighborEntityLiftsItOff,
   test_warpCreatorNewMapDestination,
+  test_warpNumberInputValidated,
+  test_warpPreviewPanelInteractive,
+  test_placedWarpsAreLiveOnTheRuntimeMap,
   test_destPreviewResolvesDestinations,
 })
 

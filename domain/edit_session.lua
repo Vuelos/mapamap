@@ -355,6 +355,41 @@ function EditSession:refreshNeighborMap(mapId)
   self:refreshObjects()
 end
 
+-- Removes an entity from whichever LAID-OUT map owns it (the edited map or
+-- a neighbor).  The kind-specific remove* ops run their own scan first and
+-- fall back here, so Details behaves IDENTICALLY for entities on other
+-- maps.  Captures the OWNER def for undo (routed by snap.mapId) and flags/
+-- refreshes appropriately.  kind is "warps" | "objects" | "signs".
+function EditSession:removeEntityFromOwner(entity, kind)
+  if not entity then return false end
+  local candidates = { { def = self.def, id = nil } }
+  for _, nb in ipairs(self.neighbors or {}) do
+    candidates[#candidates + 1] = nb
+  end
+  for _, o in ipairs(candidates) do
+    local list = o.def[kind]
+    if list then
+      for i, e in ipairs(list) do
+        if e == entity then
+          if self.undo then
+            self.undo:capture(o.def, nil, nil, o.id)
+          end
+          table.remove(list, i)
+          if o.id and o.id ~= self.mapId then
+            self:refreshNeighborMap(o.id)
+          else
+            self.mapChanged = true
+            self:refreshLiveRenderers()
+            self:refreshObjects()
+          end
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
 -- Returns the warp, object, or sign occupying a walk-grid cell on the edited
 -- map plus its type tag ("object" | "warp" | "sign"), or nil.  Priority is
 -- object > warp > sign (the order every pick/erase chain used).  `exclude`

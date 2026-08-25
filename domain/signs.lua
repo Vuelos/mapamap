@@ -158,7 +158,8 @@ function Signs:removeSign(obj)
       return true
     end
   end
-  return false
+  -- Not on the edited map: it may live on a laid-out neighbor.
+  return self:removeEntityFromOwner(obj, "signs")
 end
 
 -- Removes an sign at the cursor cell. Returns true when one was found.

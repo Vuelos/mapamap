@@ -42,6 +42,7 @@ local EncEditor = require("mods.mapamap.components.encounter_editor")
 local PartyEditor = require("mods.mapamap.components.party_editor")
 local DialogEditor = require("mods.mapamap.components.dialog_editor")
 local SlotPanel = require("mods.mapamap.components.slot_panel")
+local WarpPreview = require("mods.mapamap.components.warp_preview")
 local EntityCreator = require("mods.mapamap.components.entity_creator")
 
 -- Self-contained modal panels with a uniform contract, in priority order.
@@ -508,6 +509,18 @@ function Input.mousepressed(session, game, mx, my, button)
       end
     end
   end
+  -- Warp destination preview panel (creator form / Details warp editing):
+  -- LMB selects an existing destination warp or creates one on the clicked
+  -- tile; RMB removes a marker.  Checked BEFORE the Details outside-close
+  -- so clicking the panel never dismisses the editor.
+  if (Input.entityCreator and Input.entityCreator.entityType == "warp")
+      or (Input.details and Input.details.entityType == "warp"
+          and Input.details.entity) then
+    local hit, destMap = WarpPreview.interact(Input, session, mx, my)
+    if hit then
+      return WarpPreview.applyClick(Input, session, hit, destMap, button)
+    end
+  end
   -- A modal Details panel is open: clicks outside it close it; anything else
   -- (including clicks on the panel) is consumed so the world never paints
   -- underneath.
@@ -802,13 +815,13 @@ function Input.mousepressed(session, game, mx, my, button)
       if tx and ty then
         session.cursorBx, session.cursorBy = tx, ty
         -- ANY entity under a right-click opens its Details panel
-        -- immediately: neighbor entities open read-only.  Moving an entity
-        -- is the Details panel's MOVE button (the next LMB lands it), never
-        -- a right-drag.
-        local ent, et, ownerDef = session:entityAtWorld(tx, ty)
+        -- immediately and FULLY editable, wherever it lives: neighbor
+        -- entities behave exactly like same-map ones (field edits write
+        -- through, REMOVE lifts them off their owner map, MOVE lands them
+        -- anywhere via relocateEntityWorld).
+        local ent, et = session:entityAtWorld(tx, ty)
         if ent then
-          Input.openDetails(session, { entity = ent, entityType = et,
-            readOnly = ownerDef ~= session.def })
+          Input.openDetails(session, { entity = ent, entityType = et })
           return true
         end
         mapId, mapDef = Neighbors.mapAt(session.def, session.neighbors,

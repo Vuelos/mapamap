@@ -59,7 +59,7 @@ function test_placeWarpInBody()
   assert(w, "placeWarp should return the warp")
   assert(s:warpAt(1, 1) == w, "warp should be wired at the cell")
   assert(w.destMap == "PALLET_TOWN", "default dest is the map itself")
-  assert(w.destWarp == 0, "default dest warp is 0")
+  assert(w.destWarp == 1, "default dest warp is 1 (engine indexes warps[n] directly)")
   assert(s.mapChanged, "placing should mark the map changed")
 end
 
@@ -171,9 +171,15 @@ end
 function test_setWarpDestAndLabel()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
+  -- Warp # is validated against the destination's warp list: give
+  -- ROUTE_1 enough entries for the #2 this test points at.
+  local rd = Data.maps.ROUTE_1
+  rd.warps = rd.warps or {}
+  while #rd.warps < 3 do rd.warps[#rd.warps + 1] = { x = 0, y = 0 } end
   local w = s:placeWarp(0, 0)
   assert(s:setWarpDest(w, "ROUTE_1", 2), "dest change should succeed")
   assert(w.destMap == "ROUTE_1" and w.destWarp == 2, "dest fields updated")
+  assert(not s:setWarpDest(w, nil, 9), "past-the-end numbers are rejected")
   assert(s:setWarpLabel(w, "exit"), "label set should succeed")
   assert(w.label == "exit", "label stored on the warp")
 end
@@ -185,12 +191,12 @@ function test_connectWarpToCellCreatesReciprocal()
   local destDef = assert(data.maps.ROUTE_1, "ROUTE_1 must be loaded")
   destDef.warps = {}
   assert(s:connectWarpToCell(w, "ROUTE_1", 0, 0), "connect should succeed")
-  assert(w.destMap == "ROUTE_1" and w.destWarp == 0,
-    "source warp re-pointed at the destination warp")
+  assert(w.destMap == "ROUTE_1" and w.destWarp == 1,
+    "source warp re-pointed at the destination warp (1-based)")
   local dw = destDef.warps[1]
   assert(dw and dw.x == 0 and dw.y == 0, "destination warp placed at the cell")
   assert(dw.destMap == "PALLET_TOWN", "destination reciprocates back")
-  assert(dw.destWarp == s:warpIndex(w) - 1, "reciprocal index points at the source")
+  assert(dw.destWarp == s:warpIndex(w), "reciprocal index points at the source")
   assert(s.neighborDirty and s.neighborDirty.ROUTE_1,
     "loaded destination is marked dirty for persistence")
 end
@@ -312,6 +318,11 @@ end
 function test_detailsNudgeWarpNumber()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
+  -- The nudge walks the destination's warp list: give ROUTE_1 enough
+  -- entries for #2.
+  local rd = Data.maps.ROUTE_1
+  rd.warps = rd.warps or {}
+  while #rd.warps < 3 do rd.warps[#rd.warps + 1] = { x = 0, y = 0 } end
   local w = s:placeWarp(0, 0, "ROUTE_1", 1)
   Input.openDetails(s, { entity = w, entityType = "warp" })
   local d = Input.details
@@ -319,7 +330,7 @@ function test_detailsNudgeWarpNumber()
   Details.nudge(s, d, 1)
   assert(w.destWarp == 2, "right-nudge increments the warp number")
   Details.nudge(s, d, -3)
-  assert(w.destWarp == 0, "numeric fields clamp at 0")
+  assert(w.destWarp == 1, "numeric clamps keep a valid 1-based warp number")
 end
 
 function test_detailsKeyboardEditingLabel()

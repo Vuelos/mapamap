@@ -356,6 +356,36 @@ function WorldAdapter.applySavedPatches(session)
   session:storeOriginal()
 end
 
+-- Rebuilds the warp lookup on every LIVE Map instance that mirrors one of
+-- the session's defs (editor current map, runtime overworld map +
+-- connectionMaps, editor neighbors).  Warp place/move/remove land in
+-- def.warps AFTER those instances built their lookup once -- without this a
+-- fresh warp does nothing until the player leaves and re-enters.  Pure
+-- table rebuilds: safe inside input events on both generations (gen 2's
+-- deferred canvas rebake still rides _needsLiveRebuild separately).
+function WorldAdapter.refreshWarps(session)
+  local function reindex(m)
+    if not m then return end
+    if m.rebuildWarpIndex then
+      m:rebuildWarpIndex()          -- gen 2 (src/world/gen2/Map.lua)
+    elseif m.def and m.widthCells then
+      m.warpAt = {}                 -- gen 1 (src/world/Map.lua)
+      for i, w in ipairs(m.def.warps or {}) do
+        m.warpAt[w.y * m.widthCells + w.x] = { index = i, def = w }
+      end
+    end
+  end
+  reindex(session.map)
+  local ow = session.game and Gen.overworld(session.game)
+  if ow then
+    reindex(ow.map)
+    if ow.connectionMaps then
+      for _, m in pairs(ow.connectionMaps) do reindex(m) end
+    end
+  end
+  for _, m in pairs(session.neighborMaps or {}) do reindex(m) end
+end
+
 -- Creates an adjacent map and switches the session onto it.  The creation is
 -- engine-side (wires reciprocal connections into live data); every session
 -- re-pointing step (dirty-bookkeeping, undo reset, renderer reload) lives in

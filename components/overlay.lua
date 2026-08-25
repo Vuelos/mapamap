@@ -22,7 +22,7 @@
 local Coords = require("mods.mapamap.engine.coords")
 local Input = require("mods.mapamap.controllers.input")
 local Neighbors = require("mods.mapamap.domain.neighbors")
-local Warps = require("mods.mapamap.domain.warps")
+local WarpPreview = require("mods.mapamap.components.warp_preview")
 local Borders = require("mods.mapamap.components.mapborders")
 local Item = require("mods.mapamap.components.item")
 local Hotbar = require("mods.mapamap.components.hotbar")
@@ -432,57 +432,6 @@ local function drawSigns(session, game)
   drawEntityMarkers(session, game, Overlay._visibleSigns, SIGN_STYLE)
 end
 
--- While a warp is being edited (creator form or Details), show WHERE it
--- leads: the destination map's body gets a faint outline and the exact
--- destination cell (warp #) a bright pulsing one, plus a label chip.  Only
--- draws when the destination is one of the laid-out maps.
-local function warpDestDraft()
-  if Input.entityCreator and Input.entityCreator.entityType == "warp" then
-    local destMap, destWarp
-    for _, f in ipairs(Input.entityCreator.fields or {}) do
-      if f.key == "destMap" then destMap = f.value end
-      if f.key == "destWarp" then destWarp = tonumber(f.value) or 0 end
-    end
-    return destMap, destWarp
-  end
-  if Input.details and Input.details.entityType == "warp"
-      and Input.details.entity then
-    return Input.details.entity.destMap, Input.details.entity.destWarp
-  end
-  return nil
-end
-
-local function drawWarpDestPreview(session, game)
-  local destMap, destWarp = warpDestDraft()
-  if not destMap then return end
-  local pv = Warps.destPreview(session, destMap, destWarp)
-  if not (pv and pv.laidOut) then return end
-  local t = Coords.transform(game)
-  if not t then return end
-
-  -- Whole destination body: faint outline.
-  love.graphics.setColor(1, 0.9, 0.3, 0.35)
-  love.graphics.setLineWidth(1)
-  strokeCellRect(t, pv.ox / 16, pv.oy / 16,
-    pv.def.width * 2, pv.def.height * 2, "line")
-  -- Destination cell: bright pulse + fill.
-  local pulse = 0.55 + 0.3 * math.abs(math.sin(love.timer.getTime() * 5))
-  love.graphics.setColor(1, 0.9, 0.3, 0.22)
-  strokeCellRect(t, pv.cellX, pv.cellY, 1, 1, "fill")
-  love.graphics.setColor(1, 0.85, 0.25, pulse)
-  love.graphics.setLineWidth(2)
-  strokeCellRect(t, pv.cellX, pv.cellY, 1, 1, "line")
-  -- Label chip pinned to the cell's screen position.
-  local cx, cy = markerCenter(t, pv.ox, pv.oy, pv.cellX, pv.cellY)
-  if cx then
-    Text.label(session.font, pv.label, cx + 8 * t.sx,
-      cy - 8 * t.sy - 10 * t.sx, 1, {
-        bg = { 0.9, 0.75, 0.2, 0.9 }, padX = 3, padY = 1,
-      })
-  end
-  love.graphics.setColor(1, 1, 1, 1)
-end
-
 -- Crosshair + hint while graphical destination-pick is armed (C).
 local function drawDestPick(session, game)
   if not Input.warpDestPick then return end
@@ -530,7 +479,7 @@ function Overlay.draw(session, game, viewport)
         drawObjects(session, game)
         drawSigns(session, game)
       end
-      drawWarpDestPreview(session, game)
+      WarpPreview.draw(Input, session, game)
       drawDestPick(session, game)
     end
     -- HUD panels on top, in open/close order so the picker and Details modal

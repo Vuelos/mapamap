@@ -136,25 +136,65 @@ function NewMap.createConnectedMap(self, side)
   return NewMap.createSidedMap(self, side, 0)
 end
 
--- Creates a fresh map to serve as a WARP DESTINATION: built like any grid
--- expansion (flush against the edited map on the first free edge, walkable,
--- rendered) but WITHOUT adopting it as the editing target -- the editor
--- stays on the current map.  Tracked under _newMaps so it persists like the
--- rest of the created grid.  Returns the new id, or nil when every edge is
--- blocked.
+-- Creates a fresh INDOOR map to serve as a WARP DESTINATION: a small
+-- interior-sized room styled after the edited map (tileset, palette, border)
+-- with NO connections to anything -- reachable only through warps, never by
+-- walking.  Tracked under _newMaps so it persists like the rest of the
+-- created grid; the editor stays on the current map.  Returns the new id.
 function NewMap.createWarpDestination(self)
-  for _, side in ipairs({ "east", "south", "west", "north" }) do
-    local newId = NewMap.createConnectedMap(self, side)
-    if newId then
-      self._newMaps = self._newMaps or {}
-      self._newMaps[newId] = Common.deepCopy(self.data.maps[newId])
-      -- Re-derive the laid-out neighbor set so the overlay can preview the
-      -- destination and the runtime renders/walks it immediately.
-      self:rebuildNeighbors()
-      return newId
+  local data = self.data
+  if not data or not data.maps then return nil end
+  local newId = self.mapId .. "_IND"
+  local n = 1
+  while data.maps[newId] do
+    n = n + 1
+    newId = self.mapId .. "_IND" .. n
+  end
+  -- Interior footprint (blocks), like a vanilla house interior.
+  local newDef = NewMap.buildDef(self, newId, 10, 9)
+  newDef.name = NewMap.uniqueMapName(data, self.mapId .. " IND")
+
+  -- Walkable floor: prefer the block under the edited map's center
+  -- (guaranteed standable), falling back to ANY non-border block the source
+  -- carries -- a solid border box would seal warp-only rooms shut.
+  local srcW = math.max(1, self.def.width or 1)
+  local ccx = math.floor(srcW / 2)
+  local ccy = math.floor((self.def.height or 1) / 2)
+  local border = self.def.borderBlock or 0
+  local floorBlock = self.def.blocks[ccy * srcW + ccx + 1]
+  if floorBlock == nil or floorBlock == border then
+    for _, b in ipairs(self.def.blocks or {}) do
+      if b ~= border then floorBlock = b break end
     end
   end
-  return nil
+  floorBlock = floorBlock or border
+  local w, h = newDef.width, newDef.height
+  for i = 1, w * h do newDef.blocks[i] = floorBlock end
+  for x = 0, w - 1 do
+    newDef.blocks[x + 1] = self.def.borderBlock or 0
+    newDef.blocks[(h - 1) * w + x + 1] = self.def.borderBlock or 0
+  end
+  for y = 0, h - 1 do
+    newDef.blocks[y * w + 1] = self.def.borderBlock or 0
+    newDef.blocks[y * w + w] = self.def.borderBlock or 0
+  end
+
+  -- Arrival warp (#0) at the room's center, leading back to the edited map:
+  -- the engine lands you on def.warps[destWarp + 1], so an empty warp list
+  -- CRASHED the game on arrival.  Like a vanilla doormat, standing on it is
+  -- safe (grace) and stepping back on returns you.
+  local acx, acy = math.floor(w / 2), math.floor(h / 2)
+  newDef.warps = { { x = acx, y = acy,
+                     destMap = self.mapId, destWarp = 1 } }
+  -- Defensive empties for engines that index these unguarded.
+  newDef.bgEvents = {}
+
+  data.maps[newId] = newDef
+  self._newMaps = self._newMaps or {}
+  self._newMaps[newId] = Common.deepCopy(newDef)
+  -- Not laid out and not walked to: no neighbor rebuild needed.
+  self.mapChanged = true
+  return newId
 end
 
 return NewMap
