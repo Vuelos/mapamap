@@ -67,7 +67,6 @@ function Details.build(session, target)
       add("destMap", "Dest map", w.destMap or "?", "text")
       add("destWarp", "Warp #", tostring(w.destWarp or 0), "number")
       add("label", "Label", w.label or "", "text")
-      add("delete", "DELETE", "", "action")
     elseif et == "object" then
       local o = target.entity
       add("type", "Type", (o.object_type or "OBJECT"):upper(), "readonly")
@@ -93,13 +92,21 @@ function Details.build(session, target)
         end
         if o.isTrainer then
           add("trainerClass", "Trainer class", o.trainerClass or "", "text")
-          add("trainerParty", "Party size", tostring(o.trainerParty or 1),
+          add("trainerParty", "Party #", tostring(o.trainerParty or 1),
             "number")
+          local teamLabel = (o.customParty and #o.customParty > 0)
+            and ("CUSTOM (" .. #o.customParty .. ")") or "shared"
+          add("team", "Team", teamLabel, "action")
+          add("winText", "After win", o.winText or "", "text")
+          add("prizeItem", "Prize item", o.prizeItem or "NONE", "text")
+          add("sight", "Sight", tostring(o.sight or 0), "number")
+        end
+        if o.mart and type(o.items) == "table" then
+          add("items", "Items", table.concat(o.items, ", "), "readonly")
         end
       end
       add("pos", "Pos", (o.x ~= nil and o.y ~= nil) and (o.x .. "," .. o.y) or "-",
         "readonly")
-      add("delete", "DELETE", "", "action")
     elseif et == "sign" then
       local s = target.entity
       add("type", "Type", "SIGN", "readonly")
@@ -107,7 +114,6 @@ function Details.build(session, target)
       add("text", "Text", s.text or "", "text")
       add("pos", "Pos", (s.x ~= nil and s.y ~= nil) and (s.x .. "," .. s.y) or "-",
         "readonly")
-      add("delete", "DELETE", "", "action")
     end
   else
     local it = target and target.item
@@ -120,8 +126,14 @@ function Details.build(session, target)
         "readonly")
     else -- sprite / item
       add("name", "Name", it.name or it.id, "text")
+      if it.kind == "entity" and it.create
+          and it.create.objectType == "trainer" then
+        local party = it.create.trainerParty or 1
+        add("team", "Team",
+          tostring(it.create.trainerClass or "?") .. " #" .. tostring(party),
+          "action")
+      end
     end
-    add("delete", "DELETE", "", "action")
   end
   return fields
 end
@@ -270,7 +282,31 @@ function Details.activate(ui, session, d)
   local f = d and d.fields and d.fields[d.index]
   if not f then return end
   if f.type == "text" then
-    d.editing = { fieldIdx = d.index, buf = f.value }
+    -- Dialog fields on placed entities compose in the dialog editor
+    -- (multi-line + page breaks + live game preview); everything else edits
+    -- inline.
+    local composeKey = (f.key == "text" and d.entityType ~= nil)
+      or (f.key == "winText" and d.entity)
+    if composeKey and not d.readOnly then
+      local DialogEditor =
+        require("mods.mapamap.components.dialog_editor")
+      local ent = d.entity
+      local isWin = f.key == "winText"
+      local title = isWin and "AFTER-WIN TEXT"
+        or ((d.entityType == "sign") and "SIGN TEXT" or "DIALOG")
+      ui.details = nil
+      DialogEditor.open(ui, session, {
+        title = title,
+        text = (isWin and ent.winText or ent.text) or "",
+        onSave = function(t)
+          t = (t ~= "") and t or nil
+          if isWin then ent.winText = t else ent.text = t end
+          session.mapChanged = true
+        end,
+      })
+    elseif not d.editing then
+      d.editing = { fieldIdx = d.index, buf = f.value }
+    end
   elseif f.type == "choice" then
     cycleChoice(session, d, 1)
   elseif f.type == "action" then
@@ -279,6 +315,14 @@ function Details.activate(ui, session, d)
       local EncEditor = require("mods.mapamap.components.encounter_editor")
       ui.details = nil
       EncEditor.open(ui, session)
+    elseif f.key == "team" then
+      -- Trainer team editing shares the Party Editor's modal slot (the
+      -- details panel reopens on DONE).  Both live placements and stored
+      -- trainer tools carry the row.
+      local PartyEditor = require("mods.mapamap.components.party_editor")
+      ui.details = nil
+      PartyEditor.open(ui, session,
+        d.item and { item = d.item } or { entity = d.entity })
     else
       Details.delete(ui, session, d)
     end
@@ -286,8 +330,9 @@ function Details.activate(ui, session, d)
 end
 
 -- Deletes the target (entity from the map, or the item from the inventory).
+-- Read-only targets (entities on other maps) are never deleted.
 function Details.delete(ui, session, d)
-  if not d then return end
+  if not d or d.readOnly then return end
   if d.entity then
     local et = d.entityType
     if et == "warp" then
@@ -310,9 +355,72 @@ function Details.delete(ui, session, d)
 end
 
 -- ---------------------------------------------------------------------------
+-- Bottom action strip: MOVE / EDIT / REMOVE for world entities.  The field
+-- list stays pure data; destructive/spatial verbs live here.
+
+local BUTTON_H = 18
+local BUTTON_GAP = 4
+
+-- The buttons for a Details state.  Only live world entities get the strip;
+-- read-only targets (other maps) and inventory items/maps list nothing.
+function Details.buttons(d)
+  if not d or not d.entity or d.readOnly then return {} end
+  return {
+    { id = "move", label = "MOVE" },
+    { id = "edit", label = "EDIT" },
+    { id = "remove", label = "REMOVE" },
+  }
+end
+
+-- The rect of strip button `i` (1-based), or nil when out of range.  The
+-- strip hugs the panel bottom, just above the hint chip.
+function Details.buttonRectAt(d, i, vw, vh)
+  local buttons = Details.buttons(d)
+  local n = #buttons
+  if i < 1 or i > n then return nil end
+  local x, y, w, h = Details.rect(vw, vh)
+  local bw = (w - Panel.PAD * 2 - (n - 1) * BUTTON_GAP) / n
+  local by = y + h - Panel.PAD - 26 - BUTTON_H
+  return x + Panel.PAD + (i - 1) * (bw + BUTTON_GAP), by, bw, BUTTON_H
+end
+
+-- The id of the strip button under a screen point, or nil.
+function Details.buttonAt(d, vw, vh, mx, my)
+  for i, b in ipairs(Details.buttons(d)) do
+    local bx, by, bw, bh = Details.buttonRectAt(d, i, vw, vh)
+    if bx and mx >= bx and mx < bx + bw and my >= by and my < by + bh then
+      return b.id
+    end
+  end
+  return nil
+end
+
+-- Runs a strip button: MOVE arms a relocation carried on Input.moveTarget
+-- (the next world LMB lands the entity there), EDIT reopens the entity in
+-- its creator form, REMOVE deletes it.
+function Details.pressButton(ui, session, d, id)
+  if not d or not d.entity then return end
+  if id == "move" and not d.readOnly then
+    ui.moveTarget = { entity = d.entity, entityType = d.entityType }
+    ui.details = nil
+  elseif id == "edit" and not d.readOnly then
+    local EntityCreator =
+      require("mods.mapamap.components.entity_creator")
+    EntityCreator.openForEdit(ui, session,
+      { entity = d.entity, entityType = d.entityType })
+    ui.details = nil
+  elseif id == "remove" then
+    Details.delete(ui, session, d)
+  end
+end
+
+-- ---------------------------------------------------------------------------
 -- Open / close / keyboard
 
 -- Opens the modal Details panel for a warp / object / inventory target.
+-- `target.readOnly` (an entity living on another laid-out map) lists the
+-- fields but blocks every mutation: the session's ops are bound to the
+-- current map's def.
 function Details.open(ui, session, target)
   ui.showInventory = true
   ui.details = {
@@ -322,6 +430,7 @@ function Details.open(ui, session, target)
     item = target.item,
     map = target.map,
     mapId = target.mapId,
+    readOnly = target.readOnly or false,
     fields = Details.build(session, target),
     index = 1,
     editing = nil,
@@ -355,6 +464,7 @@ function Details.openForItem(ui, session, item)
 end
 
 -- Keyboard editing of the open Details panel.  Returns true when consumed.
+-- Read-only targets (entities on other maps) only navigate and close.
 function Details.key(ui, session, key)
   if not ui.details then return false end
   local d = ui.details
@@ -363,6 +473,15 @@ function Details.key(ui, session, key)
     return true
   elseif key == "down" then
     d.index = math.min(#(d.fields or {}), d.index + 1)
+    return true
+  elseif key == "escape" then
+    if d.editing then
+      d.editing = nil
+    else
+      ui.details = nil
+    end
+    return true
+  elseif d.readOnly then
     return true
   elseif key == "left" then
     if d.editing then return true end
@@ -385,15 +504,14 @@ function Details.key(ui, session, key)
       d.editing.buf = d.editing.buf:sub(1, #d.editing.buf - 1)
     end
     return true
+  elseif key == "m" and not d.editing then
+    Details.pressButton(ui, session, d, "move")
+    return true
+  elseif key == "e" and not d.editing then
+    Details.pressButton(ui, session, d, "edit")
+    return true
   elseif key == "x" or key == "delete" then
     Details.delete(ui, session, d)
-    return true
-  elseif key == "escape" then
-    if d.editing then
-      d.editing = nil
-    else
-      ui.details = nil
-    end
     return true
   elseif #key == 1 then
     if d.editing and d.editing.buf then
@@ -424,7 +542,7 @@ function Details.draw(session, state, vw, vh, font)
       for _, c in ipairs(f.choices) do
         if c.id == f.value then lbl = c.label break end
       end
-      value = "< " .. lbl .. " >"
+      value = "" .. lbl .. ""
     end
     if state.editing and state.editing.fieldIdx == i then
       value = state.editing.buf .. "_"
@@ -445,8 +563,42 @@ function Details.draw(session, state, vw, vh, font)
     end
   end
 
-  local hint = state.editing and "Enter: ok  Esc: cancel"
-                    or "Up/Down: field  L/R: +- / choices  Enter: edit  X: del"
+  -- Bottom action strip (MOVE / EDIT / REMOVE) for live world entities.
+  local buttons = Details.buttons(state)
+  local hoverBtn = love.mouse.getPosition()
+    and Details.buttonAt(state, vw, vh, love.mouse.getPosition()) or nil
+  for i, b in ipairs(buttons) do
+    local bx, by, bw, bh = Details.buttonRectAt(state, i, vw, vh)
+    if bx then
+      local isRemove = b.id == "remove"
+      love.graphics.setColor(isRemove and 0.45 or 0.16,
+        isRemove and 0.16 or 0.16, isRemove and 0.14 or 0.22, 0.95)
+      love.graphics.rectangle("fill", bx, by, bw, bh)
+      if isRemove then
+        love.graphics.setColor(1, 0.35, 0.3, 0.9)
+      elseif hoverBtn == b.id then
+        love.graphics.setColor(Panel.COLOR_HOVER[1], Panel.COLOR_HOVER[2],
+          Panel.COLOR_HOVER[3], Panel.COLOR_HOVER[4])
+      else
+        love.graphics.setColor(Panel.COLOR_SEL[1], Panel.COLOR_SEL[2],
+          Panel.COLOR_SEL[3], 0.9)
+      end
+      love.graphics.rectangle("line", bx, by, bw, bh)
+      local lw = Panel.labelWidth(font, b.label)
+      Text.label(font, b.label,
+        bx + math.max(2, math.floor((bw - lw) / 2)), by + 3, 2)
+    end
+  end
+  Panel.resetColor()
+
+  local hint
+  if state.readOnly then
+    hint = "READ-ONLY (other map)  Up/Down: field  Esc: close"
+  elseif state.editing then
+    hint = "Enter: ok  Esc: cancel"
+  else
+    hint = "Up/Down: field  L/R: +-  Enter: edit  M/E: move/edit  X: del"
+  end
   Panel.drawHint(font, hint, x, y, w, h)
   Panel.resetColor()
 end

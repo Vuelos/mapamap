@@ -1,6 +1,7 @@
 -- module for Session handling object and NPC instances on the edited map.
 
 local Gen = require("mods.mapamap.engine.gen")
+local EditOps = require("mods.mapamap.domain.edit_ops")
 local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 
 local Objects = {}
@@ -39,6 +40,10 @@ Objects.RANGE_CHOICES = {
     LEFT_RIGHT = "Walks left/right",
   }),
 }
+
+-- Trainer sight range cap (cells): a screen is ~10 cells across, so larger
+-- values would ambush off-screen.
+Objects.MAX_SIGHT = 10
 
 -- Marks the map changed and refreshes whatever an object edit affects.
 local function touch(self)
@@ -130,6 +135,53 @@ function Objects:setObjectProperty(obj, key, value)
     obj.trainerParty = math.max(1, math.min(party, maxParty))
     touch(self)
     return true
+  elseif key == "winText" then
+    if type(value) ~= "string" then return false end
+    if self.undo then self.undo:capture(self.def) end
+    obj.winText = (value ~= "") and value or nil
+    touch(self)
+    return true
+  elseif key == "prizeItem" then
+    if self.undo then self.undo:capture(self.def) end
+    if value == "" or value == "NONE" then
+      obj.prizeItem = nil
+      obj.prizeCount = nil
+    else
+      if not (data.items and data.items[value]) then return false end
+      obj.prizeItem = value
+      obj.prizeCount = obj.prizeCount or 1
+    end
+    touch(self)
+    return true
+  elseif key == "sight" then
+    local v = tonumber(value)
+    if not v or v < 0 then return false end
+    if self.undo then self.undo:capture(self.def) end
+    v = math.min(math.floor(v), Objects.MAX_SIGHT)
+    obj.sight = (v > 0) and v or nil
+    touch(self)
+    return true
+  elseif key == "sprite" then
+    -- Sprite swap from the creator's EDIT mode; the sheet must exist.
+    if not (value and data.sprites and data.sprites[value]) then return false end
+    if self.undo then self.undo:capture(self.def) end
+    obj.sprite = value
+    touch(self)
+    return true
+  elseif key == "berryItem" then
+    -- Gen-2 berry tree payload edits.
+    if value ~= "" and not (data.items and data.items[value]) then return false end
+    if self.undo then self.undo:capture(self.def) end
+    obj.berryItem = (value ~= "") and value or nil
+    touch(self)
+    return true
+  elseif key == "berryCount" then
+    local n = tonumber(value)
+    if not n then return false end
+    if self.undo then self.undo:capture(self.def) end
+    obj.berryCount = math.max(1, math.floor(n))
+    touch(self)
+    return true
   elseif key == "name" then
     return self:setObjectLabel(obj, value)
   end
@@ -137,8 +189,29 @@ function Objects:setObjectProperty(obj, key, value)
 end
 
 -- Bounds check for a walk-grid cell against a map def.
-local function cellIn(def, x, y)
-  return x >= 0 and y >= 0 and x < def.width * 2 and y < def.height * 2
+local cellIn = EditOps.cellIn
+
+-- Spawn-gate mirror of OverworldState.objectVisible (hidden placements,
+-- picked-up items, beaten static encounters, per-map name toggles) plus the
+-- editor's own blocker ledger, so a live refresh never resurrects something
+-- the engine itself would keep off-screen.
+local function spawnVisible(self, save, obj)
+  if not save then return true end
+  local key = self.mapId .. "_obj_" .. tostring(obj.index)
+  local toggles = save.objectToggles and save.objectToggles[self.mapId] or {}
+  local visible = not obj.hidden
+  if obj.name and toggles[obj.name] ~= nil then visible = toggles[obj.name] end
+  if obj.item and save.itemsTaken and save.itemsTaken[key] then
+    visible = false
+  end
+  if obj.pokemon and save.defeatedTrainers
+      and save.defeatedTrainers[key] then
+    visible = false
+  end
+  if obj.blocker and save.defeatedTrainers and save.defeatedTrainers[key] then
+    visible = false
+  end
+  return visible
 end
 
 -- Rebuilds the overworld's live NPC list for the current map from def.objects
@@ -151,13 +224,34 @@ function Objects:refreshObjects()
   WorldAdapter.registerTalkTexts(self)
   local ow = self.game and Gen.overworld(self.game)
   if not (ow and ow.map and ow.map.id == self.mapId) then return false end
+  -- Gen 2: the World owns its people -- object masks, time-of-day rolls,
+  -- neighbor-strip ghosts and the preserved guest list (the follower) all
+  -- live in World:rebuildPeople.  Hand-assembling ow.npcs here would be
+  -- invisible to all of that AND get desynced by the next zoom's own
+  -- rebuildPeople pass, so an edit hands the whole rebuild to the engine.
+  -- Both handles Gen.overworld can answer are tried: the raw World carries
+  -- rebuildPeople directly, while the Gen2Compat facade reaches it through
+  -- game.world.
+  if Gen.isGen2() then
+    local handles = { ow, self.game and self.game.world }
+    for _, world in ipairs(handles) do
+      if type(world) == "table" and type(world.rebuildPeople) == "function"
+          and world.map and world.map.id == self.mapId then
+        pcall(world.rebuildPeople, world)
+        return true
+      end
+    end
+  end
   local fn = ow.pooledNPC
   if not fn then return false end
+  local save = self.game and self.game.save
   ow.npcs = {}
   for _, obj in ipairs(self.def.objects or {}) do
-    local npc = fn(ow.npcPool, self.data, self.mapId, obj)
-    npc.frozen = false
-    table.insert(ow.npcs, npc)
+    if spawnVisible(self, save, obj) then
+      local npc = fn(ow.npcPool, self.data, self.mapId, obj)
+      npc.frozen = false
+      table.insert(ow.npcs, npc)
+    end
   end
   if ow.player then
     ow.entities = { ow.player }
@@ -193,14 +287,11 @@ function Objects:placeObjectCopy(cellX, cellY, sample)
   if self:cellOccupied(cellX, cellY) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.objects = self.def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(self.def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
+  local nextIndex = EditOps.nextIndex(self.def.objects)
   local copy = {}
   for k, v in pairs(sample) do copy[k] = v end
   copy.x, copy.y = cellX, cellY
-  copy.index = maxIndex + 1
+  copy.index = nextIndex
   table.insert(self.def.objects, copy)
   self.mapChanged = true
   self:refreshLiveRenderers()
@@ -220,14 +311,11 @@ function Objects:placeNewObject(cellX, cellY)
   if not spriteId then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.objects = self.def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(self.def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
+  local nextIndex = EditOps.nextIndex(self.def.objects)
   table.insert(self.def.objects, {
     x = cellX, y = cellY,
     sprite = spriteId,
-    index = maxIndex + 1,
+    index = nextIndex,
     object_type = "NPC",
     movement = "STAY",
     range = "DOWN",
@@ -266,27 +354,6 @@ function Objects:placeObjectSpec(cellX, cellY, spec)
     item = nil,
     label = spec.label,
   }
-  -- Movement + facing/roam range (engine: NPC.new reads range as the facing
-  -- when STAY and as the roam mask when WALK).
-  if spec.movement == "WALK" or spec.movement == "STAY" then
-    obj.movement = spec.movement
-  end
-  do
-    local okRange = false
-    for _, r in ipairs(Objects.OBJECT_RANGES[obj.movement]) do
-      if r == spec.range then obj.range = r; okRange = true break end
-    end
-    if not okRange and not spec.range then
-      -- keep the STAY/DOWN defaults
-    elseif not okRange then
-      obj.range = Objects.OBJECT_RANGES[obj.movement][1]
-    end
-  end
-  -- Custom dialog text (WorldAdapter.registerTalkTexts wires non-TEXT_
-  -- strings into the engine's talk dispatch).
-  if type(spec.text) == "string" and spec.text ~= "" then
-    obj.text = spec.text
-  end
   -- Movement / facing-or-roam range / dialog text from creator specs; an
   -- out-of-vocabulary range falls back to its vocabulary's first entry.
   obj.movement = (spec.movement == "WALK") and "WALK" or "STAY"
@@ -306,17 +373,94 @@ function Objects:placeObjectSpec(cellX, cellY, spec)
     obj.isTrainer = true
     obj.trainerClass = spec.trainerClass
     obj.trainerParty = math.max(1, tonumber(spec.trainerParty) or 1)
+    -- Battler dialog set: intro (text is shared with plain NPCs), the line
+    -- after defeat, and an optional one-time prize item.
+    if type(spec.text) == "string" and spec.text ~= "" then
+      obj.text = spec.text
+    end
+    if type(spec.winText) == "string" and spec.winText ~= "" then
+      obj.winText = spec.winText
+    end
+    if type(spec.prizeItem) == "string"
+        and self.data.items and self.data.items[spec.prizeItem] then
+      obj.prizeItem = spec.prizeItem
+      obj.prizeCount = math.max(1, tonumber(spec.prizeCount) or 1)
+    end
+    if spec.sight ~= nil then
+      local sv = math.max(0, math.floor(tonumber(spec.sight) or 0))
+      obj.sight = (math.min(sv, Objects.MAX_SIGHT) > 0)
+        and math.min(sv, Objects.MAX_SIGHT) or nil
+    end
+  elseif spec.objectType == "boulder" then
+    -- Strength-pushable stone: Map.isPushable keys off the boulder sheet.
+    obj.sprite = "SPRITE_BOULDER"
+    obj.pushable = true
+    obj.movement = "STAY"
+    obj.label = "Boulder"
+  elseif spec.objectType == "blocker" then
+    -- Sleeping blocker (snorlax-style): a wild battle on talk; the talk
+    -- handler marks it defeated so refreshObjects stops spawning it.
+    if not (spec.pokemon and self.data.pokemon
+            and self.data.pokemon[spec.pokemon]) then return nil end
+    obj.sprite = "SPRITE_SNORLAX"
+    obj.movement = "STAY"
+    obj.label = "Sleeping " .. tostring(spec.pokemon)
+    obj.blocker = { species = spec.pokemon,
+      level = math.max(1, math.min(tonumber(spec.level) or 30, 100)) }
+  elseif spec.objectType == "berrytree" then
+    -- Gen-2 daily berry tree: the World interaction seam hands out
+    -- berryItem once per in-game day (see World:giveCustomBerry).
+    if not (spec.berryItem and self.data.items
+            and self.data.items[spec.berryItem]) then return nil end
+    local function pickSprite(...)
+      for _, id in ipairs({ ... }) do
+        if self.data.sprites and self.data.sprites[id] then return id end
+      end
+      for id in pairs(self.data.sprites or {}) do return id end
+      return nil
+    end
+    obj.sprite = pickSprite("SPRITE_FRUIT_TREE", "SPRITE_BERRY_TREE",
+      "SPRITE_SMALL_TREE")
+    obj.movement = "STAY"
+    obj.label = "Berry Tree"
+    obj.berryItem = spec.berryItem
+    obj.berryCount = math.max(1, tonumber(spec.berryCount) or 1)
   elseif spec.objectType == "mon" then
     if not (spec.pokemon and self.data.pokemon
             and self.data.pokemon[spec.pokemon]) then return nil end
     obj.pokemon = spec.pokemon
     obj.level = math.max(1, math.min(tonumber(spec.level) or 5, 100))
+  elseif spec.objectType == "shop" then
+    -- Poke Mart: an NPC that opens a shop dialog with the listed items.
+    if type(spec.items) ~= "table" or #spec.items == 0 then return nil end
+    obj.mart = true
+    obj.items = {}
+    for _, id in ipairs(spec.items) do
+      if self.data.items and self.data.items[id] then
+        obj.items[#obj.items + 1] = id
+      end
+    end
+    if #obj.items == 0 then return nil end
   elseif spec.objectType == "itemball" then
     if not (spec.item and self.data.items and self.data.items[spec.item]) then
       return nil
     end
     obj.object_type = "item"
     obj.item = spec.item
+    if spec.hidden then
+      -- Invisible find (engine objectVisible hides hidden placements until
+      -- the pickup ledger marks them taken).
+      obj.hidden = true
+    end
+  elseif spec.objectType == "npc" then
+    -- Generic NPC: healing entities carry the healing flag so the talk
+    -- handler triggers nurseHeal() instead of a text box.
+    if spec.healing then
+      obj.healing = true
+      obj.label = obj.label or "Healer"
+    end
+  elseif spec.objectType == "none" then
+    -- Bare placement: no type-specific payload, just the label.
   end
   local spriteId = spec.sprite
   if obj.object_type == "item" and not spriteId then
@@ -325,11 +469,22 @@ function Objects:placeObjectSpec(cellX, cellY, spec)
   if spriteId and self.data.sprites and self.data.sprites[spriteId] then
     obj.sprite = spriteId
   end
-  local maxIndex = 0
-  for _, o in ipairs(self.def.objects or {}) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
+  local nextIndex = EditOps.nextIndex(self.def.objects or {})
+  obj.index = nextIndex
+  if obj.blocker then
+    -- Marker text: the key registerTalkTexts binds the wild-battle handler
+    -- to.  Unique per placement so two blockers never share a handler.
+    obj.text = "\1BLK:" .. tostring(self.mapId) .. ":" .. tostring(obj.index)
   end
-  obj.index = maxIndex + 1
+  if obj.healing then
+    -- Marker text: registerTalkTexts binds the nurseHeal handler to this key.
+    obj.text = "\1HEAL:" .. tostring(self.mapId) .. ":" .. tostring(obj.index)
+  end
+  if obj.prizeItem and not obj.text then
+    -- Gift-item NPCs with no dialog still need a talk handler to hand over
+    -- the item; generate a unique marker key.
+    obj.text = "\1GIFT:" .. tostring(self.mapId) .. ":" .. tostring(obj.index)
+  end
   if self.undo then self.undo:capture(self.def) end
   self.def.objects = self.def.objects or {}
   table.insert(self.def.objects, obj)
@@ -349,14 +504,11 @@ function Objects:placeSprite(spriteId)
   local def = self.def
   if not cellIn(def, tx, ty) then return false end
   def.objects = def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
+  local nextIndex = EditOps.nextIndex(def.objects)
   table.insert(def.objects, {
     x = tx, y = ty,
     sprite = spriteId,
-    index = maxIndex + 1,
+    index = nextIndex,
     object_type = "NPC",
     movement = "STAY",
     range = "DOWN",
@@ -381,14 +533,11 @@ function Objects:placeItem(itemId)
   local ty = self.cursorBy
   if not cellIn(def, tx, ty) then return false end
   def.objects = def.objects or {}
-  local maxIndex = 0
-  for _, o in ipairs(def.objects) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
+  local nextIndex = EditOps.nextIndex(def.objects)
   table.insert(def.objects, {
     x = tx, y = ty,
     sprite = "SPRITE_POKE_BALL",
-    index = maxIndex + 1,
+    index = nextIndex,
     object_type = "item",
     movement = "STAY",
     range = "DOWN",

@@ -5,7 +5,8 @@
 --   npc      -> name, movement (stands/walks), facing-or-roam range, dialog
 --               text, sprite SLOT (drag one in from the picker)
 --   item     -> item id (dropdown)
---   battler  -> trainer class (dropdown), party #, sprite SLOT
+--   battler  -> trainer class (dropdown), TEAM row (opens the Party Editor
+--               on that class's shared roster), sprite SLOT
 --   mon      -> species (dropdown), level, sprite SLOT
 --   sign     -> label, text
 --   warp     -> dest map (dropdown), dest warp #
@@ -33,10 +34,11 @@ local Objects = require("mods.mapamap.domain.objects")
 local Panel = require("mods.mapamap.components.panel")
 local Text = require("mods.mapamap.components.text")
 local Hotbar = require("mods.mapamap.components.hotbar")
+local Dropdown = require("mods.mapamap.components.dropdown")
 
 local EntityCreator = {}
 
-EntityCreator.DROP_H = 20
+EntityCreator.DROP_H = Dropdown.H
 
 local PAD = Panel.PAD
 local ROW_H = Panel.ROW_H
@@ -64,6 +66,13 @@ function EntityCreator.listFor(session, listKey)
   local data = session and session.data or {}
   if listKey == "sprites" then return sortedKeys(data.sprites) end
   if listKey == "items" then return sortedKeys(data.items) end
+  -- Prize list: NONE first so "no recompense" is the explicit default.
+  if listKey == "items_none" then
+    local out = { "NONE" }
+    for _, id in ipairs(sortedKeys(data.items)) do out[#out + 1] = id end
+    return out
+  end
+  if listKey == "moves" then return sortedKeys(data.moves) end
   if listKey == "trainers" then return sortedKeys(data.trainers) end
   if listKey == "maps" then return sortedKeys(data.maps) end
   if listKey == "species" then
@@ -101,25 +110,54 @@ function EntityCreator.build(session, entityType)
     add("label", "Name", "New NPC", "text")
     addChoice("movement", "Walks", "STAY", MOVEMENT_CHOICES)
     addChoice("range", "Facing", "DOWN", rangeChoicesFor("STAY"))
-    add("text", "Dialog", "", "text")
+    add("text", "Dialog", "", "action")
+    add("prizeItem", "Gift item", "NONE", "dropdown", "items_none")
     add("sprite", "Sprite", nil, "slot")
   elseif entityType == "item" then
+    add("item", "Item", firstOf(session, "items"), "dropdown", "items")
+  elseif entityType == "hiddenitem" then
     add("item", "Item", firstOf(session, "items"), "dropdown", "items")
   elseif entityType == "battler" then
     add("trainerClass", "Class", firstOf(session, "trainers"),
       "dropdown", "trainers")
-    add("trainerParty", "Party #", "1", "number")
+    add("team", "Team", "", "action")
+    add("pretext", "Before battle", "", "action")
+    add("wintext", "After win", "", "action")
+    add("prizeItem", "Prize item", "NONE", "dropdown", "items_none")
+    add("sight", "Sight", "0", "number")  -- clamped to MAX_SIGHT by objects.lua
     add("sprite", "Sprite", nil, "slot")
   elseif entityType == "mon" then
     add("pokemon", "Species", firstOf(session, "species"), "dropdown", "species")
     add("level", "Level", "5", "number")
     add("sprite", "Sprite", nil, "slot")
+  elseif entityType == "shop" then
+    add("sprite", "Sprite", nil, "slot")
+    add("addItem", "Add item", firstOf(session, "items"), "dropdown", "items")
+    add("shopItems", "Items (0)", "", "action")
   elseif entityType == "sign" then
     add("label", "Label", "New Sign", "text")
-    add("text", "Text", "...", "text")
+    add("text", "Text", "...", "action")
   elseif entityType == "warp" then
     add("destMap", "Dest map", session.mapId or "", "dropdown", "maps")
     add("destWarp", "Warp #", "0", "number")
+  elseif entityType == "pc" then
+    add("label", "Name", "PC", "text")
+    addChoice("movement", "Walks", "STAY", MOVEMENT_CHOICES)
+    addChoice("range", "Facing", "DOWN", rangeChoicesFor("STAY"))
+    add("text", "Dialog", "", "action")
+    add("sprite", "Sprite", nil, "slot")
+  elseif entityType == "healing" then
+    add("sprite", "Sprite", nil, "slot")
+  elseif entityType == "boulder" then
+    -- no fields: fixed boulder sheet, strength-pushable
+  elseif entityType == "headbutt" then
+    -- no fields: gen-2 tree-tile block resolved at paint time
+  elseif entityType == "blocker" then
+    add("pokemon", "Species", firstOf(session, "species"), "dropdown", "species")
+    add("level", "Level", "30", "number")
+  elseif entityType == "berrytree" then
+    add("berryItem", "Berry", firstOf(session, "items"), "dropdown", "items")
+    add("berryCount", "Count", "1", "number")
   end
   return fields
 end
@@ -161,9 +199,11 @@ end
 function EntityCreator.title(d)
   local Selector = require("mods.mapamap.components.entity_selector")
   for _, t in ipairs(Selector.TYPES) do
-    if t.key == (d and d.entityType) then return "NEW " .. t.label end
+    if t.key == (d and d.entityType) then
+      return (d.editEntity and "EDIT " or "NEW ") .. t.label
+    end
   end
-  return "NEW ENTITY"
+  return (d.editEntity and "EDIT ENTITY" or "NEW ENTITY")
 end
 
 -- ---------------------------------------------------------------------------
@@ -242,14 +282,14 @@ end
 
 -- Bounding rect of the open dropdown list for the active row: directly below
 -- it, clamped above the CREATE button.
-function EntityCreator.dropRect(vw, vh, d, rowIdx, scrollOffset)
+function EntityCreator.dropRect(vw, vh, d, rowIdx)
   local x, y, w, h = EntityCreator.rect(vw, vh)
   local ry = rowTop(d.fields or {}, y, rowIdx)
   local dropTop = ry + ROW_H + 6
-  local _, by, _, _ = EntityCreator.createBtnRect(vw, vh)
+  local _, by = EntityCreator.createBtnRect(vw, vh)
   local maxDropH = by - 4 - dropTop
   if maxDropH < EntityCreator.DROP_H then return nil end
-  return x + PAD, dropTop, w - PAD * 2, maxDropH, scrollOffset or 0
+  return x + PAD, dropTop, w - PAD * 2, maxDropH
 end
 
 -- The dropdown entry (1-based, into the field's list) under (mx,my), or nil.
@@ -270,6 +310,7 @@ end
 -- on the matching virtual catalog so a sprite can be dragged straight in.
 local SLOT_PICKER_TAB = {
   npc = "person", battler = "person", mon = "monster",
+  healing = "person", pc = "person", shop = "person",
 }
 
 function EntityCreator.hasSpriteSlot(entityType)
@@ -314,6 +355,7 @@ function EntityCreator.open(ui, session, entityType)
     error = nil,
     hidSelector = hidSelector,
     openedPicker = openedPicker,
+    shopItems = (entityType == "shop") and {} or nil,
   }
   return ui.entityCreator
 end
@@ -323,6 +365,203 @@ end
 local function restorePanels(d, ui)
   if d.hidSelector then ui.showEntitySelector = true end
   if d.openedPicker then ui.showPicker = false end
+end
+
+-- ---------------------------------------------------------------------------
+-- Edit mode: reopen a placed entity in the creator form (Details -> EDIT).
+
+-- The creator form kind that edits a placed entity.  Object flavors are told
+-- apart by their placement markers (object_type / pushable / blocker /
+-- berryItem / isTrainer / pokemon).
+function EntityCreator.editKindFor(session, entity, entityType)
+  if entityType == "warp" then return "warp" end
+  if entityType == "sign" then return "sign" end
+  if not entity then return nil end
+  if entity.object_type == "item" then
+    return entity.hidden and "hiddenitem" or "item"
+  end
+  if entity.pushable then return "boulder" end
+  if entity.blocker then return "blocker" end
+  if entity.healing then return "healing" end
+  if entity.berryItem then return "berrytree" end
+  if entity.isTrainer then return "battler" end
+  if entity.pokemon then return "mon" end
+  if entity.mart or entity.objectType == "shop" then return "shop" end
+  return "npc"
+end
+
+-- Seeds an open form's fields from a live entity's current values.  Only
+-- keys the form actually carries are written, so form-shape changes never
+-- leak stale rows.
+function EntityCreator.prefillFrom(session, d, entity)
+  if not (d and entity) then return d end
+  local b = entity.blocker
+  local src = {
+    label = entity.label,
+    movement = entity.movement,
+    range = entity.range,
+    text = entity.text,
+    pretext = entity.text,
+    sprite = entity.sprite,
+    pokemon = entity.pokemon or (b and b.species),
+    level = entity.level or (b and b.level),
+    item = entity.item,
+    berryItem = entity.berryItem,
+    berryCount = entity.berryCount,
+    trainerClass = entity.trainerClass,
+    wintext = entity.winText,
+    prizeItem = entity.prizeItem or "NONE",
+    sight = entity.sight or 0,
+    destMap = entity.destMap,
+    destWarp = entity.destWarp,
+    items = type(entity.items) == "table"
+      and table.concat(entity.items, ", ") or nil,
+  }
+  for _, f in ipairs(d.fields) do
+    local v = src[f.key]
+    if v ~= nil then
+      f.value = (type(v) == "number") and tostring(v) or v
+    end
+  end
+  return d
+end
+
+-- Opens the creator prefilled with `target`'s live values ({ entity,
+-- entityType }); CREATE writes the form back to that same entity instead of
+-- arming a placement tool.
+function EntityCreator.openForEdit(ui, session, target)
+  local t = target or {}
+  if not t.entity then return nil end
+  local kind = EntityCreator.editKindFor(session, t.entity, t.entityType)
+  if not kind then return nil end
+  local d = EntityCreator.open(ui, session, kind)
+  if not d then return nil end
+  -- Seed the shop items list from the entity's item array.
+  if kind == "shop" and type(t.entity.items) == "table" then
+    d.shopItems = {}
+    for _, id in ipairs(t.entity.items) do
+      d.shopItems[#d.shopItems + 1] = id
+    end
+  end
+  EntityCreator.prefillFrom(session, d, t.entity)
+  -- Update the shopItems row label to reflect seeded count.
+  if d.shopItems then
+    for _, f in ipairs(d.fields or {}) do
+      if f.key == "shopItems" then
+        f.label = "Items (" .. #d.shopItems .. ")"
+      end
+    end
+  end
+  d.editEntity = { entity = t.entity, entityType = t.entityType }
+  return d
+end
+
+-- Writes one edited form value back to a live object through the session's
+-- validated setters.  Returns true when written.
+local function applyObjectField(session, o, key, v)
+  if key == "label" then
+    return session:setObjectProperty(o, "name", v)
+  elseif key == "pretext" then
+    -- The battler/healing forms split dialog across named rows; they land
+    -- on the object's single talk text.
+    return session:setObjectProperty(o, "text", v or "")
+  elseif key == "wintext" then
+    return session:setObjectProperty(o, "winText", v or "")
+  elseif o.blocker and (key == "pokemon" or key == "level") then
+    -- Sleeping blockers keep their battle spec inside the blocker table;
+    -- the NPC-level pokemon/level fields do not exist for them.
+    if key == "pokemon" then
+      if not (v and session.data.pokemon and session.data.pokemon[v]) then
+        return false
+      end
+      o.blocker.species = v
+    else
+      o.blocker.level = math.max(1, math.min(tonumber(v) or 30, 100))
+    end
+    session.mapChanged = true
+    return true
+  elseif o.mart and key == "items" then
+    -- Shop item list: comma-separated item IDs on the form, array on the obj.
+    if type(v) ~= "string" then return false end
+    local items = {}
+    if v ~= "" then
+      for item in v:gmatch("[^,]+") do
+        local id = item:match("^%s*(.-)%s*$")
+        if id ~= "" then
+          if session.data.items and session.data.items[id] then
+            items[#items + 1] = id
+          else
+            return false
+          end
+        end
+      end
+    end
+    if #items == 0 then return false end
+    o.items = items
+    session.mapChanged = true
+    return true
+  end
+  return session:setObjectProperty(o, key, v)
+end
+
+-- EDIT-mode commit: writes every form field back to the live entity the form
+-- was opened for.  All writable fields are applied even when one fails; the
+-- first failure is reported so the form can stay open with a reason.
+function EntityCreator.applyEdit(ui, session, d)
+  local ee = d.editEntity
+  if not (ee and ee.entity) then return false, "nothing to edit" end
+  local ent, et = ee.entity, ee.entityType
+  local failKey
+  for _, f in ipairs(d.fields) do
+    local v = f.value
+    local ok
+    -- Shop items are managed as a list; skip the form fields that represent
+    -- the picker and display rows — they're written from d.shopItems below.
+    if f.key == "addItem" or f.key == "shopItems" then
+      ok = true
+    elseif et == "object" then
+      ok = applyObjectField(session, ent, f.key, v)
+    elseif et == "warp" then
+      if f.key == "destMap" then
+        ok = (v ~= "" and session.data.maps[v])
+          and session:setWarpDest(ent, v) or false
+      elseif f.key == "destWarp" then
+        ok = session:setWarpDest(ent, nil, math.max(0, tonumber(v) or 0))
+      elseif f.key == "label" then
+        ok = session:setWarpLabel(ent, v)
+      else
+        ok = true
+      end
+    elseif et == "sign" then
+      if f.key == "label" then
+        ok = session:setSignLabel(ent, v)
+      elseif f.key == "text" then
+        ent.text = (v ~= "" and v) or "..."
+        session.mapChanged = true
+        ok = true
+      else
+        ok = true
+      end
+    else
+      ok = true
+    end
+    if not ok and not failKey then failKey = f.label end
+  end
+  -- Write back the shop items list from the accumulated array.
+  if et == "object" and d.shopItems and ent.mart then
+    local items = {}
+    for _, id in ipairs(d.shopItems) do
+      if session.data.items and session.data.items[id] then
+        items[#items + 1] = id
+      end
+    end
+    if #items > 0 then
+      ent.items = items
+      session.mapChanged = true
+    end
+  end
+  if failKey then return false, failKey:lower() .. ": invalid value" end
+  return true
 end
 
 -- Closes the form without creating anything.
@@ -367,11 +606,28 @@ function EntityCreator.toolItem(session, d)
                         text = dialog,
                         label = (vals.label and vals.label ~= "")
                           and vals.label or nil } }
+  elseif et == "pc" then
+    local sprite, err = spriteOrError()
+    if not sprite then return nil, err end
+    return { kind = "entity", entityType = "object",
+             create = { objectType = "npc", sprite = sprite,
+                        movement = movement, range = range,
+                        text = dialog,
+                        label = vals.label or "PC" } }
   elseif et == "item" then
     if not (vals.item and data.items and data.items[vals.item]) then
       return nil, "pick an item"
     end
     return { kind = "item", id = vals.item }
+  elseif et == "hiddenitem" then
+    if not (vals.item and data.items and data.items[vals.item]) then
+      return nil, "pick an item"
+    end
+    -- An invisible item ball: the engine hides obj.hidden placements and
+    -- the pickup ledger (itemsTaken) keeps it found.
+    return { kind = "entity", entityType = "object",
+             create = { objectType = "itemball", item = vals.item,
+                        hidden = true } }
   elseif et == "battler" then
     local tdef = vals.trainerClass and data.trainers
       and data.trainers[vals.trainerClass]
@@ -382,10 +638,29 @@ function EntityCreator.toolItem(session, d)
     return { kind = "entity", entityType = "object",
              create = { objectType = "trainer",
                         trainerClass = vals.trainerClass,
-                        trainerParty = math.max(1,
-                          math.min(tonumber(vals.trainerParty) or 1, maxParty)),
+                        trainerParty = 1,
                         movement = movement, range = range,
-                        text = dialog, sprite = sprite } }
+                        sprite = sprite,
+                        text = (type(vals.pretext) == "string"
+                          and vals.pretext ~= "") and vals.pretext or nil,
+                         winText = (type(vals.wintext) == "string"
+                           and vals.wintext ~= "") and vals.wintext or nil,
+                         prizeItem = (type(vals.prizeItem) == "string"
+                           and vals.prizeItem ~= "NONE"
+                           and data.items and data.items[vals.prizeItem])
+                           and vals.prizeItem or nil,
+sight = math.max(0,
+                            math.min(math.floor(tonumber(vals.sight) or 0),
+                              Objects.MAX_SIGHT)) } }
+  elseif et == "healing" then
+    local sprite, err = spriteOrError()
+    if not sprite then return nil, err end
+    return { kind = "entity", entityType = "object",
+             create = { objectType = "npc",
+                        healing = true,
+                        sprite = sprite,
+                        movement = movement, range = range,
+                        label = "Healer" } }
   elseif et == "mon" then
     if not (vals.pokemon and data.pokemon and data.pokemon[vals.pokemon]) then
       return nil, "pick a species"
@@ -397,6 +672,35 @@ function EntityCreator.toolItem(session, d)
                         level = math.max(1, math.min(tonumber(vals.level) or 5, 100)),
                         movement = movement, range = range,
                         text = dialog, sprite = sprite } }
+  elseif et == "shop" then
+    local sprite, err = spriteOrError()
+    if not sprite then return nil, err end
+    -- Build from the accumulated list; fall back to comma-separated text for
+    -- legacy / prefillFrom compatibility.
+    local shopItems = {}
+    if d.shopItems and #d.shopItems > 0 then
+      for _, id in ipairs(d.shopItems) do
+        if data.items and data.items[id] then
+          shopItems[#shopItems + 1] = id
+        end
+      end
+    elseif type(vals.items) == "string" and vals.items ~= "" then
+      for item in vals.items:gmatch("[^,]+") do
+        local id = item:match("^%s*(.-)%s*$")
+        if id ~= "" then
+          if data.items and data.items[id] then
+            shopItems[#shopItems + 1] = id
+          else
+            return nil, "unknown item: " .. id
+          end
+        end
+      end
+    end
+    if #shopItems == 0 then return nil, "add at least one item" end
+    return { kind = "entity", entityType = "object",
+             create = { objectType = "shop", sprite = sprite,
+                        movement = movement, range = range,
+                        items = shopItems } }
   elseif et == "sign" then
     return { kind = "entity", entityType = "sign",
              create = { text = (vals.text and vals.text ~= "") and vals.text
@@ -409,18 +713,58 @@ function EntityCreator.toolItem(session, d)
     return { kind = "entity", entityType = "warp",
              create = { destMap = vals.destMap,
                         destWarp = math.max(0, tonumber(vals.destWarp) or 0) } }
+  elseif et == "boulder" then
+    return { kind = "entity", entityType = "object",
+             create = { objectType = "boulder" } }
+  elseif et == "headbutt" then
+    -- Paint tool, not an entity: the gen-2 tree-tile block resolves from the
+    -- edited tileset at paint time (Paint.headbuttBlockFor).
+    return { kind = "headbutt" }
+  elseif et == "blocker" then
+    if not (vals.pokemon and data.pokemon and data.pokemon[vals.pokemon]) then
+      return nil, "pick a species"
+    end
+    return { kind = "entity", entityType = "object",
+             create = { objectType = "blocker",
+                        pokemon = vals.pokemon,
+                        level = math.max(1,
+                          math.min(tonumber(vals.level) or 30, 100)) } }
+  elseif et == "berrytree" then
+    if not (vals.berryItem and data.items and data.items[vals.berryItem]) then
+      return nil, "pick a berry"
+    end
+    return { kind = "entity", entityType = "object",
+             create = { objectType = "berrytree",
+                        berryItem = vals.berryItem,
+                        berryCount = math.max(1,
+                          tonumber(vals.berryCount) or 1) } }
   end
   return nil, "unknown entity type"
 end
 
 -- Validates + commits: builds the tool item, arms the selected hotbar slot
 -- with it and files a copy in the inventory's Entities tab so the configured
--- tool stays available after leaving this map.  Returns true when the form
--- produced a valid tool (the form closes); on a validation failure the form
+-- tool stays available after leaving this map.  In EDIT mode (opened from the
+-- Details panel) nothing is armed: the form's values are written back to the
+-- live entity instead.  Returns true when the form produced a valid tool /
+-- applied its edits (the form closes); on a validation failure the form
 -- stays open with the reason.
 function EntityCreator.commit(ui, session)
   local d = ui.entityCreator
   if not d then return false end
+  if d.editEntity then
+    local ok, err = EntityCreator.applyEdit(ui, session, d)
+    if not ok then
+      d.error = err
+      return false
+    end
+    -- Like CREATE, editing ends with immediate world access: leave every
+    -- panel that could swallow the next LMB closed.
+    ui.showEntitySelector = false
+    ui.showPicker = false
+    ui.entityCreator = nil
+    return true
+  end
   local item, err = EntityCreator.toolItem(session, d)
   if not item then
     d.error = err
@@ -429,7 +773,11 @@ function EntityCreator.commit(ui, session)
   ui.hotbar[ui.selected] = item
   Hotbar.apply(ui, session)
   Inventory.add(ui, Common.deepCopy(item))
-  restorePanels(d, ui)
+  -- On COMMIT the goal is immediate placement of the created tool: close the
+  -- auto-swapped selector/picker instead of restoring them (a restored
+  -- selector would eat the very click that should place the entity).
+  ui.showEntitySelector = false
+  ui.showPicker = false
   ui.entityCreator = nil
   return true
 end
@@ -487,6 +835,81 @@ function EntityCreator.acceptDrop(ui, session, mx, my, dragItem)
   return false
 end
 
+-- Restores a previously-open creation form (same entity type, same typed
+-- values) after the party editor borrowed the modal slot.  Values match by
+-- field key, so form-shape changes never leak stale rows.
+function EntityCreator.restoreDraft(ui, session, draft)
+  if not draft then return nil end
+  local d = EntityCreator.open(ui, session, draft.entityType)
+  if not (d and draft.fields) then return d end
+  for _, f in ipairs(d.fields) do
+    for _, old in ipairs(draft.fields) do
+      if old.key == f.key and old.value ~= nil then f.value = old.value end
+    end
+  end
+  return d
+end
+
+-- Opens the Party Editor on the battler form's selected class (shared roster,
+-- party #1), parking the draft so closing the editor brings the form back.
+local function openTeamEditor(ui, session, d)
+  local class
+  for _, f in ipairs(d.fields) do
+    if f.key == "trainerClass" then class = f.value end
+  end
+  if not (class and session.data.trainers
+          and session.data.trainers[class]) then
+    d.error = "pick a trainer class first"
+    return true
+  end
+  local Common = require("mods.mapamap.common")
+  local PartyEditor = require("mods.mapamap.components.party_editor")
+  local draft = { entityType = d.entityType,
+                  fields = Common.deepCopy(d.fields) }
+  ui.entityCreator = nil
+  if PartyEditor.openShared(ui, session, class) then
+    ui.partyEditor.returnCreator = { draft = draft }
+  else
+    -- Nothing editable: put the form back untouched.
+    ui.entityCreator = d
+  end
+  return true
+end
+
+-- The creator fields that compose with the dialog editor: key -> title.
+local DIALOG_TITLES = {
+  text = "NPC DIALOG",
+  pretext = "PRE-BATTLE TEXT",
+  wintext = "AFTER-WIN TEXT",
+  sign_text = "SIGN TEXT",
+}
+
+local function dialogTargetFor(entityType, key)
+  if key == "text" and entityType == "sign" then return "sign_text" end
+  if DIALOG_TITLES[key] then return key end
+  return nil
+end
+
+-- Opens the Dialog Editor for a message field, parking the draft; DONE
+-- restores the form with the composed text patched into the field.
+local function openTextEditor(ui, session, d, fieldKey)
+  local initial
+  for _, f in ipairs(d.fields) do
+    if f.key == fieldKey then initial = f.value or "" end
+  end
+  local Common = require("mods.mapamap.common")
+  local DialogEditor = require("mods.mapamap.components.dialog_editor")
+  local draft = { entityType = d.entityType,
+                  fields = Common.deepCopy(d.fields) }
+  ui.entityCreator = nil
+  DialogEditor.open(ui, session, {
+    title = DIALOG_TITLES[fieldKey] or "DIALOG",
+    text = initial,
+    returnCreator = { draft = draft, fieldKey = fieldKey },
+  })
+  return true
+end
+
 -- ---------------------------------------------------------------------------
 -- Mouse
 
@@ -506,7 +929,19 @@ function EntityCreator.mousepressed(ui, session, mx, my, button)
       d.dropdown.scroll)
     if idx then
       local list = EntityCreator.listFor(session, f.list)
-      if list[idx] then f.value = list[idx] end
+      if list[idx] then
+        if f.key == "addItem" and d.shopItems then
+          d.shopItems[#d.shopItems + 1] = list[idx]
+          -- Update the shopItems row label to reflect count.
+          for _, o in ipairs(d.fields or {}) do
+            if o.key == "shopItems" then
+              o.label = "Items (" .. #d.shopItems .. ")"
+            end
+          end
+        else
+          f.value = list[idx]
+        end
+      end
     end
     d.dropdown = nil
     return true
@@ -521,7 +956,8 @@ function EntityCreator.mousepressed(ui, session, mx, my, button)
   -- Field rows: a click selects; dropdown fields pop their list open; slot
   -- fields clear on RMB, fill from a hotbar-held sprite on LMB, and grab
   -- their sprite onto the hotbar when clicked empty-handed (mirroring the
-  -- Brush Maker's slots).  Text/number editing starts with Enter.
+  -- Brush Maker's slots).  The TEAM action row opens the party editor.
+  -- Text/number editing starts with Enter.
   local idx = EntityCreator.hit(vw, vh, mx, my, d)
   if idx and d.fields and idx <= #d.fields then
     d.index = idx
@@ -529,6 +965,23 @@ function EntityCreator.mousepressed(ui, session, mx, my, button)
     local f = d.fields[idx]
     if f.type == "dropdown" and button == 1 then
       d.dropdown = { scroll = 0, filter = "" }
+    elseif f.type == "action" and f.key == "shopItems" then
+      if button == 2 and d.shopItems and #d.shopItems > 0 then
+        table.remove(d.shopItems)
+        for _, o in ipairs(d.fields or {}) do
+          if o.key == "shopItems" then
+            o.label = "Items (" .. #d.shopItems .. ")"
+          end
+        end
+      end
+    elseif f.type == "action" and button == 1 then
+      if f.key == "team" then
+        return openTeamEditor(ui, session, d)
+      end
+      return openTextEditor(ui, session, d, f.key)
+    elseif f.key and dialogTargetFor(d.entityType, f.key) and button == 1 then
+      return openTextEditor(ui, session, d,
+        dialogTargetFor(d.entityType, f.key))
     elseif f.type == "slot" then
       local held = Hotbar.selected(ui)
       if button == 2 then
@@ -553,14 +1006,11 @@ function EntityCreator.scroll(ui, dy)
   local f = d.fields and d.fields[d.index]
   if not f then return end
   local list = EntityCreator.listFor(session, f.list)
-  if #list == 0 then return end
   local vw, vh = love.graphics.getDimensions()
-  local dx, _, _, dh = EntityCreator.dropRect(vw, vh, d, d.index,
-    d.dropdown.scroll)
-  if not dx then return end
-  local maxVisible = math.floor(dh / EntityCreator.DROP_H)
-  local maxScroll = math.max(0, #list - maxVisible)
-  d.dropdown.scroll = math.max(0, math.min(d.dropdown.scroll + dy, maxScroll))
+  local _, _, _, dh = EntityCreator.dropRect(vw, vh, d, d.index)
+  if not dh then return end
+  d.dropdown.scroll =
+    Dropdown.scrollBy(#list, d.dropdown.scroll, dy, dh)
 end
 
 -- ---------------------------------------------------------------------------
@@ -579,11 +1029,9 @@ function EntityCreator.key(ui, session, key)
       d.dropdown.scroll = math.max(0, d.dropdown.scroll - 1)
     elseif key == "down" then
       local vw, vh = love.graphics.getDimensions()
-      local dx, _, _, dh = EntityCreator.dropRect(vw, vh, d, d.index,
-        d.dropdown.scroll)
-      local maxVisible = dh and math.floor(dh / EntityCreator.DROP_H) or 8
-      local maxScroll = math.max(0, #list - maxVisible)
-      d.dropdown.scroll = math.min(d.dropdown.scroll + 1, maxScroll)
+      local _, _, _, dh = EntityCreator.dropRect(vw, vh, d, d.index)
+      d.dropdown.scroll =
+        Dropdown.scrollBy(#list, d.dropdown.scroll, 1, dh or Dropdown.H * 8)
     elseif key == "return" or key == "kpenter" then
       local pick = list[(d.dropdown.scroll or 0) + 1]
       if pick then f.value = pick end
@@ -592,12 +1040,9 @@ function EntityCreator.key(ui, session, key)
       d.dropdown = nil
     elseif #key == 1 then
       d.dropdown.filter = (d.dropdown.filter or "") .. key:upper()
-      local matches = {}
-      for _, s in ipairs(list) do
-        if s:find(d.dropdown.filter, 1, true) then matches[#matches + 1] = s end
-      end
-      if #matches == 1 then
-        f.value = matches[1]
+      local pickIdx = Dropdown.uniqueMatch(list, d.dropdown.filter)
+      if pickIdx then
+        f.value = list[pickIdx]
         d.dropdown = nil
       end
     end
@@ -657,6 +1102,15 @@ function EntityCreator.key(ui, session, key)
         d.dropdown = { scroll = 0, filter = "" }
       elseif f.type == "choice" then
         EntityCreator.cycleChoice(d, f, 1)
+      elseif f.type == "action" then
+        if f.key == "team" then
+          return openTeamEditor(ui, session, d)
+        end
+        if f.key == "shopItems" then return true end
+        return openTextEditor(ui, session, d, f.key)
+      elseif f.key and dialogTargetFor(d.entityType, f.key) then
+        return openTextEditor(ui, session, d,
+          dialogTargetFor(d.entityType, f.key))
       elseif f.type == "slot" then
         -- Enter opens the picker so a sprite can be dragged in (the form
         -- stays open one column further right).
@@ -722,7 +1176,7 @@ function EntityCreator.draw(session, state, vw, vh, font)
         end
       elseif f.type == "choice" then
         -- Choice rows show the friendly label wrapped in cycle chevrons.
-        local value = "< " .. EntityCreator.choiceLabel(f) .. " >"
+        local value = "" .. EntityCreator.choiceLabel(f) .. ""
         if state.editing and state.editing.fieldIdx == i then
           value = state.editing.buf .. "_"
         end
@@ -733,6 +1187,30 @@ function EntityCreator.draw(session, state, vw, vh, font)
         end
       else
         local value = f.value or ""
+        if f.key and dialogTargetFor(state.entityType, f.key) then
+          -- Composable dialog fields show a one-line snippet.
+          if #value > 0 then
+            local firstLine = value:gsub("[\n\f].*$", "")
+            value = firstLine .. ((#value > #firstLine) and " ..." or "")
+          else
+            value = "ENTER TO COMPOSE"
+          end
+        elseif f.type == "action" and f.key == "team" then
+          -- The TEAM row names the class it will edit, live from the form.
+          local cls
+          for _, o in ipairs(state.fields or {}) do
+            if o.key == "trainerClass" then cls = o.value end
+          end
+          value = "EDIT TEAM"
+        elseif f.type == "action" and f.key == "shopItems" then
+          if state.shopItems and #state.shopItems > 0 then
+            value = table.concat(state.shopItems, ", ")
+          else
+            value = "RMB to remove | no items"
+          end
+        elseif f.type == "action" then
+          value = "SET"
+        end
         if state.editing and state.editing.fieldIdx == i then
           value = state.editing.buf .. "_"
           Text.label(font, Panel.fitText(font, value, vw2 - 8, 2), vx + 4,
@@ -770,25 +1248,20 @@ function EntityCreator.draw(session, state, vw, vh, font)
     local di = state.index
     local f = state.fields and state.fields[di]
     if f then
-      local dx, dy, dw, dh = EntityCreator.dropRect(vw, vh, state, di,
-        state.dropdown.scroll)
+      local dx, dy, dw, dh = EntityCreator.dropRect(vw, vh, state, di)
       if dx then
         local list = EntityCreator.listFor(session, f.list)
-        local maxVisible = math.floor(dh / EntityCreator.DROP_H)
-        local hoverEntry = EntityCreator.dropEntryAt(vw, vh, state, mx, my, di,
-          state.dropdown.scroll)
-        local entries = {}
-        for k = 1, maxVisible do
-          local id = list[(state.dropdown.scroll or 0) + k]
-          if not id then break end
-          entries[k] = { label = id }
+        local hoverEntry = EntityCreator.dropEntryAt(vw, vh, state, mx, my,
+          di, state.dropdown.scroll)
+        -- Highlight the visible row matching the current value.
+        local selIdx
+        for k = 1, Dropdown.visibleCount(dh) do
+          if list[(state.dropdown.scroll or 0) + k] == f.value then
+            selIdx = (state.dropdown.scroll or 0) + k break
+          end
         end
-        local selIdx = nil
-        for k, e in ipairs(entries) do
-          if e.label == f.value then selIdx = (state.dropdown.scroll or 0) + k; break end
-        end
-        Panel.renderDropdownList(font, dx, dy, dw, dh, entries,
-          1, maxVisible, selIdx, hoverEntry, EntityCreator.DROP_H)
+        Dropdown.draw(font, list, dx, dy, dw, dh, state.dropdown.scroll,
+          selIdx, hoverEntry)
       end
     end
   end
@@ -800,6 +1273,8 @@ function EntityCreator.draw(session, state, vw, vh, font)
     hint = "Type a value  Enter: ok  Esc: cancel"
   elseif state.error then
     hint = "!! " .. state.error
+  elseif state.editEntity then
+    hint = "L/R: +- / choices  CREATE: write edits back to the entity"
   else
     hint = "L/R: +- / choices  drag a sprite into the slot  CREATE: arm hotbar"
   end

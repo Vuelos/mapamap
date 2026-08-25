@@ -30,6 +30,7 @@ local Toolbar = require("mods.mapamap.components.toolbar")
 local Picker = require("mods.mapamap.components.picker")
 local Inventory = require("mods.mapamap.components.inventory")
 local BrushEditor = require("mods.mapamap.components.brush_editor")
+local SlotPanel = require("mods.mapamap.components.slot_panel")
 local Text = require("mods.mapamap.components.text")
 
 local Overlay = {}
@@ -536,6 +537,9 @@ function Overlay.draw(session, game, viewport)
     if Input.showBrushEditor then
       BrushEditor.draw(session, Input.brushDraft, vw, vh, session.font)
     end
+    if Input.slotsOpen then
+      SlotPanel.draw(Input, session, vw, vh, session.font)
+    end
     if Input.showEntitySelector then
       local EntitySelector = require("mods.mapamap.components.entity_selector")
       EntitySelector.draw(session, vw, vh, session.font)
@@ -551,6 +555,15 @@ function Overlay.draw(session, game, viewport)
     if Input.encEditor then
       local EncEditor = require("mods.mapamap.components.encounter_editor")
       EncEditor.draw(session, Input.encEditor, vw, vh, session.font)
+    end
+    if Input.partyEditor then
+      local PartyEditor = require("mods.mapamap.components.party_editor")
+      PartyEditor.draw(session, Input.partyEditor, vw, vh, session.font)
+    end
+    if Input.dialogEditor then
+      local DialogEditor =
+        require("mods.mapamap.components.dialog_editor")
+      DialogEditor.draw(session, Input.dialogEditor, vw, vh, session.font)
     end
 
     -- A picked-up item (picker or hotbar drag) floats under the cursor above

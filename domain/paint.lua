@@ -17,6 +17,22 @@ local Warps = require("mods.mapamap.domain.warps")
 
 local Paint = {}
 
+-- ---------------------------------------------------------------------------
+-- Special block resolvers (CUT TREE / HEADBUTT TREE paint tools)
+--
+-- Both trees are TILE-level mechanics; the shared resolution lives in
+-- domain/tree_blocks.lua (leaf module -- Item.draw resolves thumbnails too).
+
+local TreeBlocks = require("mods.mapamap.domain.tree_blocks")
+
+function Paint.cutTreeBlockFor(session)
+  return TreeBlocks.cutBlockFor(session)
+end
+
+function Paint.headbuttBlockFor(session)
+  return TreeBlocks.headbuttBlockFor(session)
+end
+
 -- The block / sprite id stored at a given screen point, for the cursor pick.
 -- Returns nil when not over the world.
 function Paint.pickUnder(session, game, mx, my)
@@ -105,6 +121,15 @@ function Paint.paintAt(ui, brush, session, mx, my)
     session.cursorBx = bx * 2
     session.cursorBy = by * 2
     return session:paintBrush(item, bx, by)
+  end
+
+  -- Tree paint tools: resolve the edited tileset's cut-tree / headbutt-tree
+  -- block and continue down the normal block path with it.
+  if item.kind == "tree" or item.kind == "headbutt" then
+    local bid = (item.kind == "tree")
+      and Paint.cutTreeBlockFor(session) or Paint.headbuttBlockFor(session)
+    if not bid then return false end
+    item = { kind = "block", id = bid }
   end
 
   -- Blocks paint with the shared map_ops brush.  Cursor is snapped to whole

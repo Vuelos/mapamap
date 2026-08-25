@@ -18,6 +18,7 @@ local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 local Input = require("mods.mapamap.controllers.input")
 local Overlay = require("mods.mapamap.components.overlay")
 local SessionManager = require("mods.mapamap.controllers.session_manager")
+local BattleLink = require("mods.mapamap.controllers.battle_link")
 local Gen = require("mods.mapamap.engine.gen")
 local Bridge = require("mods.mapamap.engine.dramaless_bridge")
 
@@ -50,6 +51,9 @@ end
 
 local function run(mod)
   Bridge.init(mod)
+  -- Custom per-placement teams: capture the engaged NPC and answer the
+  -- engine's trainer.party hook with its obj.customParty roster.
+  BattleLink.init(mod)
   -- Hooks run as (next, game, viewport); draw our overlay and continue the
   -- chain so lower-priority mods and the vanilla no-op still run.
   local firstDrawLogged = false
@@ -98,8 +102,22 @@ local function run(mod)
     local orig = Game.keypressed
     Game.keypressed = function(self, key)
       if SessionManager.active and SessionManager.session then
-        SessionManager.reconcile(self)
-        local consumed = Input.keypressed(SessionManager.session, key)
+        -- Reconcile is per-key/mouse; contain it like everything else so an
+        -- editor bug can never take the game down from this wrap (this is a
+        -- direct method replacement, not a Hooks link).
+        local okr = xpcall(function()
+          SessionManager.reconcile(self)
+        end, tb)
+        if not okr then return end
+        -- Same containment for the key dispatch itself: failures land in
+        -- MAPAMAP_CRASH and the key stays consumed.
+        local okc, consumed = xpcall(function()
+          return Input.keypressed(SessionManager.session, key) and true or false
+        end, tb)
+        if not okc then
+          logCrash(mod, "keypressed:" .. tostring(key), consumed)
+          return true
+        end
         if consumed then return end
         if key == "escape" then
           SessionManager.close(); return
@@ -153,8 +171,15 @@ local function run(mod)
     local origWheel = Game.wheelmoved
     function Game:wheelmoved(dx, dy)
       if SessionManager.active and SessionManager.session then
-        SessionManager.reconcile(SessionManager.session.game)
-        if Input.wheelmoved(SessionManager.session, dy) then return end
+        local okr, consumed = xpcall(function()
+          SessionManager.reconcile(SessionManager.session.game)
+          return Input.wheelmoved(SessionManager.session, dy) and true or false
+        end, tb)
+        if not okr then
+          logCrash(mod, "wheelmoved", consumed)
+          return
+        end
+        if consumed then return end
       end
       if origWheel then return origWheel(self, dx, dy) end
     end

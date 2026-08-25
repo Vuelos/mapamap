@@ -16,6 +16,7 @@ local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 local Input = require("mods.mapamap.controllers.input")
 local Coords = require("mods.mapamap.engine.coords")
 local Save = require("mods.mapamap.storage.patch_saver")
+local Slots = require("mods.mapamap.storage.slots")
 local Connections = require("mods.mapamap.domain.connections")
 local MapGrid = require("mods.mapamap.domain.map_grid")
 local Gen = require("mods.mapamap.engine.gen")
@@ -231,16 +232,55 @@ function Manager.autoSave()
   if Manager.mod then Manager.persist(Manager.mod) end
 end
 
--- Closes the active session: persists every edit, resets the controller/brush
--- state, restores the rendered neighbor ring, and deactivates the overlay.
-function Manager.close()
+-- Tears the active session down WITHOUT persisting it.  Only the slot
+-- activation path uses this: persisting after the edit buckets were already
+-- swapped would re-write the outgoing edit-set over the activated slot.
+local function deactivate()
   local game = Manager.session and Manager.session.game
-  if Manager.mod then Manager.persist(Manager.mod) end
   Input.reset()
   Bridge.restoreRenderRadius(game)
   Manager.active = false
   Manager.session = nil
   Manager.mod = nil
+end
+
+-- Closes the active session: persists every edit, resets the controller/brush
+-- state, restores the rendered neighbor ring, and deactivates the overlay.
+function Manager.close()
+  if Manager.mod then Manager.persist(Manager.mod) end
+  deactivate()
+end
+
+-- Switches the running edit-set to a stored map-slot (the Map Slots panel's
+-- LOAD).  Order matters:
+--   1. persist the open session first, so unsaved paints land in the live
+--      buckets;
+--   2. stash those buckets as the auto "previous" slot (activating without
+--      a prior SAVE stays recoverable);
+--   3. swap the buckets to the slot's contents;
+--   4. replay them into the loaded data (renderer invalidation included);
+--   5. reopen the session fresh, so its snapshots and dirty-bookkeeping
+--      describe the ACTIVATED state -- a stale session would diff its old
+--      world view back over the new buckets on the next persist.
+-- Maps edited by the outgoing set but untouched by the incoming one keep
+-- their painted look until the game save reloads; everything else applies
+-- immediately.  Returns true on success, or false + an error message.
+function Manager.activateSlot(mod, name)
+  local rec = Slots.get(mod, name)
+  if not rec then return false, "no slot named " .. tostring(name) end
+  local game = Manager.session and Manager.session.game
+  local reopen = Manager.active and game ~= nil
+  if Manager.mod then Manager.persist(Manager.mod) end
+  Slots.store(mod, Slots.PREVIOUS)
+  Slots.applyBuckets(mod, rec)
+  Manager.replayPatches(mod)
+  if reopen then
+    local keepPanel = Input.slotsOpen
+    deactivate()
+    Manager.open(mod, game)
+    Input.slotsOpen = keepPanel
+  end
+  return true
 end
 
 -- While the overlay is open the player can still walk across map borders, so
@@ -307,6 +347,14 @@ function Manager.replayPatches(mod)
   end
   -- Merge extra connections into primary connections so the engine can use them.
   Connections.mergeExtraConnections(mod, data)
+  -- Replay edited trainer parties over data.trainers so shared-team edits
+-- survive a reload (battles read the tables live at battle start).
+  local TrainerParty = require("mods.mapamap.domain.trainer_party")
+  local Keys = require("mods.mapamap.storage.save_keys")
+  local savedParties = mod.save:get(Keys.TRAINER_PARTIES, {})
+  if next(savedParties) then
+    TrainerParty.replayInto(data, savedParties)
+  end
   -- Any replayed patch may reference grafted foreign blocks -- grow every
   -- touched tileset's atlas from the live defs before maps rebuild, so a
   -- patched map renders its imports instead of drawing blank cells.

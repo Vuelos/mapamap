@@ -328,4 +328,9 @@ function Save.importAll(mod)
   return edits
 end
 
+-- Shared with storage/slots.lua: the map-slot export files land in the same
+-- game-source tree (mods/<mod>/export/<name>.lua) and reuse these writers.
+Save.sourceRootDir = sourceRoot
+Save.writeSourceFile = writeSourceFile
+
 return Save

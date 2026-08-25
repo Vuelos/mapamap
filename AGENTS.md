@@ -19,7 +19,7 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 | Module             | Responsibility                                                            |
 | ------------------ | ------------------------------------------------------------------------- |
 | `main.lua`         | F6 toggle, hook/wrap registration; all session work delegated to `controllers/session_manager.lua` |
-| `controllers/session_manager.lua` | Session lifecycle: `open`/`close`, `autoSave`/persist (diff patches + whole new maps + hotbar/inventory), `reconcile` on map-border walk, grid expansion (`MapGrid.autofill`) on open/entry, `createAdjacentMap`, `replayPatches` on save.loaded |
+| `controllers/session_manager.lua` | Session lifecycle: `open`/`close`, `autoSave`/persist (diff patches + whole new maps + hotbar/inventory), `reconcile` on map-border walk, grid expansion (`MapGrid.autofill`) on open/entry, `createAdjacentMap`, `replayPatches` on save.loaded, `activateSlot` (map-slot switching) |
 | `controllers/editor_tools.lua` | Brush/tool drag state (paint/erase arms, dedupe anchors, entity-drag ghost, void-stroke buffer) + `apply`/`erase`/`commitVoidStroke` routing into `domain/paint.lua`; single owner of the `brush` table passed to Paint |
 | `domain/edit_session.lua` | Editor state; mixes in `domain/map_ops`, `domain/editor_neighbors`, `domain/warps`; warp/object placement helpers, `paintedBlocks`, `createMapAtCursor` (paint-time void creation) |
 | `domain/map_grid.lua`| Load-time grid expansion (`autofill`) + paint-time void creation (`createForBlocks`/`createForPaint`): BFS layout, open-void candidates, `createMap` (reciprocal flush wiring) |
@@ -35,7 +35,10 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 | `components/inventory.lua`| Persistent left panel with category tabs (Tiles/Entities/Blueprints/Brushes); each tab's FIRST grid cell is that tab's own toolbar shortcut ([E] tileset picker, [F] entity factory, [R] blueprint rect-select, [M] Brush Maker; letters draw in caps) and the rest of the grid lists only the stored collection (`tabFor` / `listFor`); adds from hotbar drops file the item silently onto its respective tab, creator/blueprint saves jump to theirs; also the collection model (add/list) |
 | `components/item.lua`  | Shared slot thumbnail renderer (blocks, sprites, items, blueprints, warps, objects, brushes)   |
 | `components/brush_editor.lua` | Brush Maker panel (toolbar `M`): spatial two-layout slot grid — a 5x5 main grid (core 3x3 centered, inner corners on the panel corners) over a complete 5x5 line cross (borderless runs ln/ls/lw/le at the arm tips, v/h corridors inner on their axes, isolated o at the cross center; nonexistent join positions render as dim placeholders); tiles are dragged/clicked in from the hotbar/picker/inventory, RMB clears a slot, SAVE stores `{ kind = "brush" }` in the inventory's Brushes tab; RMB on a saved brush cell loads it back into the maker |
-| `components/details.lua`| Modal Details panel for warps + objects + inventory items (Pos/Dest/name/label, nudge, DELETE via keyboard or click); open/close/keyboard model |
+| `components/slot_panel.lua` | Map Slots panel (toolbar `V`): save-slot manager for the whole edit-set — slots list (click selects, wheel scrolls), action strip (SAVE / LOAD / NEW / RENAME / DEL / EXPORT), and the export-folder listing (`export/*.lua`; click imports). RENAME types inline (printables append, Backspace trims, Enter commits via `Slots.rename`, Esc cancels); all panel state lives on Input (`slotsOpen`, `slotSel`, `slotRename`, `slotScroll`, `slotFileScroll`, `slotMsg`) |
+| `storage/slots.lua` | Map-slot persistence: a slot deep-copies ALL five edit buckets (patches / encounters / connections / newMaps / trainerParties) under a name in `mapamap_slots`. `applyBuckets` is a FULL bucket replacement (activation never merges), export/import move records through `mods/<mod>/export/<name>.lua` (SaveSerializer grammar; absolute-path writer shared with patch_saver). The auto `previous` slot is written by every LOAD as a recoverable pre-swap backup |
+| `components/details.lua`| Modal Details panel for warps + objects + inventory items (Pos/Dest/name/label, nudge); bottom action strip (MOVE / EDIT / REMOVE); keyboard: Up/Down, L/R: +/-, Enter: edit, X: delete, M: move, E: edit entity; open/close/keyboard model |
+| `components/entity_creator.lua` | Creator form for NPCs / items / trainers / mons / shops / warps / signs. NEW arms the hotbar slot on CREATE; EDIT (via Details strip) applies written changes back to the placed entity; right-click an inventory cell to edit it |
 | `domain/` `engine/` `storage/` | Reused data operations from `map_editor` split by concern: `domain/*` pure data/state mutators, `engine/*` game & LÖVE bridges (gen, graft, coords, world_adapter), `storage/*` persistence (patch_saver, config) |
 | `domain/warps.lua` | Warp editing operations (place, move, remove, connect, label) mixed into Session |
 | `engine/world_adapter.lua` | Engine/rendering bridge: Gen 1 renderer rebuilds, Gen 2 canvas drop/re-bake, live NPC pool sync, `applySavedPatches`, `createAdjacentMap`, `reconcileSession` |
@@ -65,12 +68,33 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 | Paint a terrain brush        | Load a saved brush into a slot, then LMB paint — each cell picks its tile from the join mask and surrounding brush cells re-blend |
 | Edit a saved brush           | RMB a Brushes-tab cell loads it into the maker |
 | Place a warp                 | Load an Entities-tab cell (or build one in the factory) into a slot, then LMB paint. The New Warp template places exactly ONE self-destined warp (no return pair) |
-| Place / copy an object       | Entities-tab cells load copy tools; the entity factory ([F]) configures fresh NPCs / items / battlers / mons and CREATE arms the hotbar slot; both paint with LMB (1x1 cell). Creator tools keep their `create` spec when re-loaded from the inventory |
+| Place / copy an object       | Entities-tab cells load copy tools; the entity factory ([F]) configures fresh NPCs / items / trainers / mons / shops and CREATE arms the hotbar slot; both paint with LMB (1x1 cell). Creator tools keep their `create` spec when re-loaded from the inventory. RMB an inventory cell to edit it in the creator form |
 | Move a warp                  | Right-drag a warp to its new cell       |
 | Graphical dest pick          | `C`, then click the destination on the world     |
-| Open Details / rename        | RMB an inventory cell, a world warp, or a world object |
-| Edit a field (Details)       | Up/Down: field, Left/Right: +/-, Enter: edit, X: delete, Esc: close; click a row selects it (Enter edits), the DELETE row runs on click |
+| Open Details / rename        | RMB an inventory cell, or any world warp / object / sign |
+| Edit a field (Details)       | Up/Down: field, Left/Right: +/-, Enter: edit, X: delete, M: move, E: edit entity, Esc: close; click a row selects it (Enter edits), actions (encounters / team) run on click |
+| MOVE / EDIT / REMOVE buttons | Bottom strip of the Details panel for live world entities; MOVE arms a relocation carried on `Input.moveTarget` (next LMB lands the entity), EDIT reopens the entity in its creator form, REMOVE deletes it |
+| Open Map Slots               | `V` (or the toolbar V button); Esc closes |
+| Save a map slot              | Click a slot row (or NEW for a fresh YY.MM.DD.HH.MM.SS timestamp), then SAVE — captures the whole live edit-set under that name |
+| Load / rename / delete       | LOAD swaps the stored edit-set in (auto-backup to the `previous` slot first, then replays into the running world and reopens the session); RENAME types inline (Enter commits, Esc cancels); DEL removes it |
+| Export / import slots        | EXPORT writes `export/<name>.lua` next to the mod source; clicking a file under EXPORT FILES imports it as a new slot |
+| Scroll Map Slots lists       | Wheel over the slots list or the export-files list |
 | Blueprint / inventory save   | `mapamap_inventory` on close (F6)       |
+
+### Map slots
+
+The Map Slots panel (`V`) versions the WHOLE edit-set, not single maps: a slot
+snapshot deep-copies all five persistence buckets (patches, encounter
+patches, connection patches, new maps, trainer parties) under a name in
+`mapamap_slots`. NEW/SAVE default to a YY.MM.DD.HH.MM.SS capture timestamp
+(same-second captures step forward; export files inherit the name as
+`<name>.lua`), RENAME gives custom names. LOAD is a full bucket replacement
+followed by `SessionManager.replayPatches` + a fresh session open, so most
+edits show up immediately; maps painted by the outgoing set but untouched by
+the loaded one keep their look until the game save reloads. Every LOAD first
+stashes the live buckets as the auto `previous` slot. EXPORT/IMPORT share
+`mods/mapamap/export/<name>.lua` files (SaveSerializer grammar), so edit-sets
+can be committed to the repo and shared like `map_edits/patches.lua`.
 
 ### Expand vs. create at the edges
 

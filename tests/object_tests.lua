@@ -16,6 +16,7 @@ local Input = require("mods.mapamap.controllers.input")
 local Inventory = require("mods.mapamap.components.inventory")
 local Details = require("mods.mapamap.components.details")
 local Panel = require("mods.mapamap.components.panel")
+local Coords = require("mods.mapamap.engine.coords")
 
 local mod = {
   log = { warn = function() end, info = function() end, error = function() end },
@@ -213,7 +214,7 @@ function test_detailsObjectBuildFields()
     "Facing row is a choice")
   assert(keys[5] == "text" and types.text == "text", "Dialog row is editable")
   assert(keys[6] == "pos" and types.pos == "readonly", "Pos row is readonly")
-  assert(keys[7] == "delete" and types.delete == "action", "DELETE action row")
+  assert(#keys == 6, "object has 6 field rows (no inline DELETE)")
   -- Choice vocabularies ride on the rows.
   for _, f in ipairs(d.fields) do
     if f.type == "choice" then
@@ -258,18 +259,20 @@ function test_detailsObjectDeleteByMouseClick()
   Input.openDetails(s, { entity = o, entityType = "object" })
   Input.details.index = 1
   local n = #Input.details.fields
-  assert(n == 7, "object details lists 7 rows")
-  local px, py, pw, ph = Details.rect(VW, VH)
-  local rowY = py + Panel.PAD + 20
-  local delY = rowY + (n - 1) * (Panel.ROW_H + 6)
-  assert(Input.mousepressed(s, game, px + pw / 2, delY, 1),
-    "click on the DELETE row is consumed")
-  assert(#s.def.objects == 0, "mouse-click DELETE removes the object")
-  assert(Input.details == nil, "Details closes after the click-delete")
+  assert(n == 6, "object details lists 6 rows")
+  -- Click the REMOVE button in the bottom strip (button index 3).
+  local bx, by, bw, bh = Details.buttonRectAt(Input.details, 3, VW, VH)
+  assert(bx, "REMOVE button rect exists")
+  assert(Input.mousepressed(s, game, bx + bw / 2, by + bh / 2, 1),
+    "click on the REMOVE button is consumed")
+  assert(#s.def.objects == 0, "mouse-click REMOVE removes the object")
+  assert(Input.details == nil, "Details closes after the click-remove")
   -- A click on a non-action row must NOT delete.
   s:placeNewObject(3, 3)
   Input.openDetails(s, { entity = s.def.objects[1], entityType = "object" })
-  assert(Input.mousepressed(s, game, px + pw / 2, rowY, 1),
+  local rowY = select(2, Details.rect(VW, VH)) + Panel.PAD + 20
+  local px = select(1, Details.rect(VW, VH))
+  assert(Input.mousepressed(s, game, px + Panel.PAD, rowY, 1),
     "click on the first row is consumed")
   assert(#s.def.objects == 1, "clicking a text/readonly row does not delete")
 end
@@ -305,12 +308,12 @@ function test_detailsWarpDeleteByMouseClick()
   local w = s:placeWarp(1, 1)
   Input.openDetails(s, { entity = w, entityType = "warp" })
   local n = #Input.details.fields
-  assert(n == 5, "warp details lists 5 rows")
-  local px, py, pw, ph = Details.rect(VW, VH)
-  local rowY = py + Panel.PAD + 20
-  local delY = rowY + (n - 1) * (Panel.ROW_H + 6)
-  assert(Input.mousepressed(s, game, px + pw / 2, delY, 1),
-    "click on the warp DELETE row is consumed")
+  assert(n == 4, "warp details lists 4 rows")
+  -- Click the REMOVE button in the bottom strip (button index 3).
+  local bx, by, bw, bh = Details.buttonRectAt(Input.details, 3, VW, VH)
+  assert(bx, "REMOVE button rect exists")
+  assert(Input.mousepressed(s, game, bx + bw / 2, by + bh / 2, 1),
+    "click on the REMOVE button is consumed")
   assert(#s.def.warps == 0, "warp removed by mouse click")
 end
 
@@ -397,6 +400,54 @@ function test_tabListObjectsShowsOnlySavedItems()
     "live objects are not mixed into the inventory object tab")
 end
 
+-- Right-clicking an entity on ANOTHER laid-out map opens read-only Details:
+-- the hover markers are neighbor-aware, so the pick must be too.
+function test_rmbNeighborEntityOpensReadOnlyDetails()
+  local s = freshSession()
+  resetInput()
+  local east = { width = 2, height = 2, tileset = s.def.tileset,
+    blocks = { 1, 1, 1, 1 },
+    objects = { { x = 0, y = 0, sprite = "LASS", index = 1 } } }
+  s.neighbors = { { id = "EAST", def = east, ox = s.def.width * 32, oy = 0 } }
+  local realTransform = Coords.transform
+  Coords.transform = function()
+    return { camx = 0, camy = 0, sx = 1, sy = 1, wox = 0, woy = 0 }
+  end
+  -- The first cell of the neighbor (its local 0,0) sits just past the root's
+  -- east edge.
+  local wx = s.def.width * 2 * 16 + 8
+  assert(Input.mousepressed(s, game, wx, 8, 2),
+    "RMB on a neighbor entity is consumed")
+  assert(Input.mousereleased(s, wx, 8, 2), "release consumed")
+  Coords.transform = realTransform
+  assert(Input.details ~= nil, "RMB opens Details for the neighbor entity")
+  assert(Input.details.readOnly, "the panel is read-only")
+  Input.keypressed(s, "x")
+  assert(#east.objects == 1, "read-only delete leaves the other map intact")
+  Input.keypressed(s, "escape")
+  assert(Input.details == nil, "Escape closes it")
+end
+
+function test_lmbNeighborEntityPicksUpCopy()
+  local s = freshSession()
+  resetInput()
+  local eastObj = { x = 0, y = 0, sprite = "LASS", index = 1,
+    object_type = "NPC" }
+  local east = { width = 2, height = 2, tileset = s.def.tileset,
+    blocks = { 1, 1, 1, 1 }, objects = { eastObj } }
+  s.neighbors = { { id = "EAST", def = east, ox = s.def.width * 32, oy = 0 } }
+  local realTransform = Coords.transform
+  Coords.transform = function()
+    return { camx = 0, camy = 0, sx = 1, sy = 1, wox = 0, woy = 0 }
+  end
+  local wx = s.def.width * 2 * 16 + 8
+  Input.mousepressed(s, game, wx, 8, 1)
+  Coords.transform = realTransform
+  local tool = Input.hotbar[Input.selected]
+  assert(tool and tool.kind == "entity" and tool.entityType == "object"
+    and tool.obj == eastObj, "LMB picks up the neighbor entity as a tool")
+end
+
 return {
   name = "MAPAMAP_OBJECT",
   tests = {
@@ -408,6 +459,8 @@ return {
     "test_objectCellLoadsCopyTool",
     "test_creatorToolCellKeepsCreatePayload",
     "test_objectTemplateCellLoadsNewTool",
+    "test_rmbNeighborEntityOpensReadOnlyDetails",
+    "test_lmbNeighborEntityPicksUpCopy",
     "test_inventoryRmbOnObjectOpensDetails",
     "test_detailsObjectBuildFields",
     "test_detailsObjectKeyboardDelete",

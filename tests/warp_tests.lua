@@ -291,7 +291,7 @@ function test_detailsBuildWarpFields()
   assert(keys[2] == "destMap" and types.destMap == "text", "Dest map is text")
   assert(keys[3] == "destWarp" and types.destWarp == "number", "Warp # is numeric")
   assert(keys[4] == "label", "Label field present")
-  assert(keys[5] == "delete" and types.delete == "action", "DELETE action row")
+  assert(#keys == 4, "warp has 4 field rows (no inline DELETE)")
   assert(d.index == 1, "opens on the first field")
 end
 

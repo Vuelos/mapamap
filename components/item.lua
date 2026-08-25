@@ -29,6 +29,29 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
   local r = session.map and session.map.renderer
   local A = alpha or 1
 
+  -- Tree paint tools: render the resolved tileset block as the thumbnail.
+  if item.kind == "tree" or item.kind == "headbutt" then
+    local okT, TreeBlocks = pcall(require,
+      "mods.mapamap.domain.tree_blocks")
+    local bid = nil
+    if okT and session then
+      bid = (item.kind == "tree") and TreeBlocks.cutBlockFor(session)
+        or TreeBlocks.headbuttBlockFor(session)
+    end
+    if bid then
+      return Item.draw(session, { kind = "block", id = bid,
+        tileset = session.tileset and session.tileset.id }, x, y, boxSize,
+        nil, A)
+    end
+    love.graphics.setColor(0.2, 0.55, 0.25, 0.85 * A)
+    love.graphics.rectangle("fill", x, y, boxSize, boxSize)
+    love.graphics.setColor(1, 1, 1, A)
+    if session.font then
+      session.font.draw("?", x + boxSize / 3, y + boxSize / 3)
+    end
+    return true
+  end
+
   if item.kind == "blueprint" then
     local bp = item
     if not bp or not bp.w or not bp.h or not bp.tiles or #bp.tiles == 0 then
@@ -205,9 +228,24 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
     end
     if et == "object" then
       -- A creator tool (create payload) previews the sprite it will place;
-      -- item balls fall back to the poke-ball sheet like the placer does.
+      -- fixed-sheet tools (boulder/blocker/berry tree) fall back to their
+      -- own sheets so the thumbnail is never blank.
       local o = item.obj
       local spr = o and o.sprite or (item.create and item.create.sprite)
+      if not spr and item.create then
+        local candidates = ({
+          boulder = { "SPRITE_BOULDER" },
+          blocker = { "SPRITE_SNORLAX" },
+          berrytree = { "SPRITE_FRUIT_TREE", "SPRITE_BERRY_TREE",
+            "SPRITE_SMALL_TREE" },
+          shop = { "SPRITE_CLERK", "SPRITE_RECEPTIONIST" },
+        })[item.create.objectType]
+        for _, id in ipairs(candidates or {}) do
+          if session.data and session.data.sprites[id] then
+            spr = id break
+          end
+        end
+      end
       if not spr and ((item.create and item.create.objectType == "itemball")
           or (o and o.object_type == "item")) then
         spr = "SPRITE_POKE_BALL"
@@ -240,20 +278,11 @@ function Item.draw(session, item, x, y, boxSize, tileset, alpha)
   end
 
   if item.kind == "item" then
-    -- Items render as their overworld sprite when the data carries one; else
-    -- a small labelled pill so the slot still reads.
+    -- Items render as their overworld sprite when the data carries one; all
+    -- item balls display as a pokeball on the overworld, so default to that.
     local idef = session.data and session.data.items and session.data.items[item.id]
-    local sprite = idef and idef.sprite
-    if sprite then
-      return Item.draw(session, { kind = "sprite", id = sprite }, x, y, boxSize, nil, A)
-    end
-    love.graphics.setColor(0.35, 0.6, 1, 0.5 * A)
-    love.graphics.rectangle("fill", x, y, boxSize, boxSize)
-    love.graphics.setColor(1, 1, 1, A)
-    if session.font then
-      session.font.draw(item.id, x + 2, y + 2)
-    end
-    return true
+    local sprite = (idef and idef.sprite) or "SPRITE_POKE_BALL"
+    return Item.draw(session, { kind = "sprite", id = sprite }, x, y, boxSize, nil, A)
   end
 
   return false

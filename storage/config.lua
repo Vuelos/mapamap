@@ -54,6 +54,13 @@ function State.reset(ui)
   ui.brushSource = nil
   ui.showMapBorders = false
   ui.showEntityOverlays = true
+  -- Map Slots panel state (components/slot_panel.lua reads these).
+  ui.slotsOpen = false
+  ui.slotSel = nil
+  ui.slotRename = nil
+  ui.slotScroll = 1
+  ui.slotFileScroll = 1
+  ui.slotMsg = nil
   ui._needsGraftRebuild = false
 end
 

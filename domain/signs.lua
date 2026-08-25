@@ -1,14 +1,13 @@
 -- module for Session handling Signs instances on the edited map.
 
 local Gen = require("mods.mapamap.engine.gen")
+local EditOps = require("mods.mapamap.domain.edit_ops")
 local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 
 local Signs = {}
 
 -- Bounds check for a walk-grid cell against a map def.
-local function cellIn(def, x, y)
-  return x >= 0 and y >= 0 and x < def.width * 2 and y < def.height * 2
-end
+local cellIn = EditOps.cellIn
 
 function Signs:refreshSigns()
   -- Sign placement/moves need no renderer work, but custom sign texts must
@@ -71,14 +70,11 @@ function Signs:placeSignCopy(cellX, cellY, sample)
   if not (sample and sample.text) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.signs = self.def.signs or {}
-  local maxIndex = 0
-  for _, o in ipairs(self.def.signs) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
+  local nextIndex = EditOps.nextIndex(self.def.signs)
   local copy = {}
   for k, v in pairs(sample) do copy[k] = v end
   copy.x, copy.y = cellX, cellY
-  copy.index = maxIndex + 1
+  copy.index = nextIndex
   table.insert(self.def.signs, copy)
   self.mapChanged = true
   self:refreshLiveRenderers()
@@ -93,13 +89,10 @@ function Signs:placeNewSign(cellX, cellY)
   if self:cellOccupied(cellX, cellY) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.signs = self.def.signs or {}
-  local maxIndex = 0
-  for _, o in ipairs(self.def.signs) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
+  local nextIndex = EditOps.nextIndex(self.def.signs)
   table.insert(self.def.signs, {
     x = cellX, y = cellY,
-    index = maxIndex + 1,
+    index = nextIndex,
     text = "...",
     label = "",
   })
@@ -116,13 +109,10 @@ function Signs:placeSignSpec(cellX, cellY, spec)
   if self:cellOccupied(cellX, cellY) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.signs = self.def.signs or {}
-  local maxIndex = 0
-  for _, o in ipairs(self.def.signs) do
-    if (o.index or 0) > maxIndex then maxIndex = o.index end
-  end
+  local nextIndex = EditOps.nextIndex(self.def.signs)
   table.insert(self.def.signs, {
     x = cellX, y = cellY,
-    index = maxIndex + 1,
+    index = nextIndex,
     text = (spec and spec.text) or "...",
     label = (spec and spec.label) or "",
   })

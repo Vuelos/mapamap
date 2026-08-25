@@ -5,6 +5,7 @@ local Fill = require("mods.mapamap.domain.fill")
 local Common = require("mods.mapamap.common")
 local Snapshot = require("mods.mapamap.domain.snapshot")
 local Gen = require("mods.mapamap.engine.gen")
+local EditOps = require("mods.mapamap.domain.edit_ops")
 local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 local Bridge = require("mods.mapamap.engine.dramaless_bridge")
 local CELL_PX = Common.CELL_PX
@@ -336,15 +337,12 @@ local Graft = require("mods.mapamap.engine.graft")
         local localCy = cy - math.floor((oy or 0) / CELL_PX)
         if localCx >= 0 and localCy >= 0 and localCx < def.width * 2 and localCy < def.height * 2 then
           def.objects = def.objects or {}
-          local maxIndex = 0
-          for _, o in ipairs(def.objects) do
-            if (o.index or 0) > maxIndex then maxIndex = o.index end
-          end
+          local nextIndex = EditOps.nextIndex(def.objects)
           local newObject = {}
           for k, v in pairs(bpObject) do newObject[k] = v end
           newObject.x = localCx
           newObject.y = localCy
-          newObject.index = maxIndex + 1
+          newObject.index = nextIndex
           if self.undo then self.undo:capture(def) end
           table.insert(def.objects, newObject)
           changed = true
@@ -365,15 +363,12 @@ local Graft = require("mods.mapamap.engine.graft")
         local localCy = cy - math.floor((oy or 0) / CELL_PX)
         if localCx >= 0 and localCy >= 0 and localCx < def.width * 2 and localCy < def.height * 2 then
           def.signs = def.signs or {}
-          local maxIndex = 0
-          for _, s in ipairs(def.signs) do
-            if (s.index or 0) > maxIndex then maxIndex = s.index end
-          end
+          local nextIndex = EditOps.nextIndex(def.signs)
           local newSign = {}
           for k, v in pairs(bpSign) do newSign[k] = v end
           newSign.x = localCx
           newSign.y = localCy
-          newSign.index = maxIndex + 1
+          newSign.index = nextIndex
           if self.undo then self.undo:capture(def) end
           table.insert(def.signs, newSign)
           changed = true

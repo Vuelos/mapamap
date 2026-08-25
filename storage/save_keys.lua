@@ -18,6 +18,12 @@ Keys.HOTBAR = "mapamap_hotbar"
 Keys.INVENTORY = "mapamap_inventory"
 -- Pre-inventory blueprint book; folded into INVENTORY on load.
 Keys.LEGACY_BLUEPRINTS = "mapamap_blueprints"
+-- Edited trainer parties (class -> partyIndex -> party slots), applied over
+-- data.trainers on replay so shared-team edits survive a reload.
+Keys.TRAINER_PARTIES = "mapamap_trainer_parties"
+-- Named map-slot snapshots ({ [name] = record }) written by the Map Slots
+-- panel; each record snapshots every edit bucket at once.
+Keys.SLOTS = "mapamap_slots"
 -- Crash log written by main.lua's error handler.
 Keys.CRASH_LOG = "mapamap_crash.log"
 

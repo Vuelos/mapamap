@@ -26,6 +26,7 @@ Toolbar.BUTTONS = {
   { key = "R", id = "blueprint",  on = function(ui) return ui.blueprintMode end },
   { key = "M", id = "brushmaker", on = function(ui) return ui.showBrushEditor end },
   { key = "F", id = "factory",    on = function(ui) return ui.showEntitySelector end },
+  { key = "V", id = "slots",      on = function(ui) return ui.slotsOpen end },
 }
 
 -- Colours: yellow when the button's surface is open, dark otherwise.

@@ -33,6 +33,15 @@ local function reset()
   Input.mouseButtons = { [1] = false, [2] = false, [3] = false }
   Input.details = nil
   Input.encEditor = nil
+  -- Pin the panel state other suites may leave behind: these tests assume
+  -- only the Brush Maker is open over a visible inventory.
+  Input.showInventory = true
+  Input.showPicker = false
+  Input.showEntitySelector = false
+  Input.entityCreator = nil
+  Input.partyEditor = nil
+  Input.dialogEditor = nil
+  Input.dialogEditor = nil
 end
 
 -- Join-mask builder: keys of `joined` are present terrain.

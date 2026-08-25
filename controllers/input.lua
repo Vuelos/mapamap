@@ -29,6 +29,7 @@
 -- while the overlay is closed.  Coordinates arrive in LOVE screen units.
 
 local Coords = require("mods.mapamap.engine.coords")
+local Gen = require("mods.mapamap.engine.gen")
 local Neighbors = require("mods.mapamap.domain.neighbors")
 local Common = require("mods.mapamap.common")
 local EditorTools = require("mods.mapamap.controllers.editor_tools")
@@ -38,6 +39,28 @@ local Toolbar = require("mods.mapamap.components.toolbar")
 local Inventory = require("mods.mapamap.components.inventory")
 local Details = require("mods.mapamap.components.details")
 local EncEditor = require("mods.mapamap.components.encounter_editor")
+local PartyEditor = require("mods.mapamap.components.party_editor")
+local DialogEditor = require("mods.mapamap.components.dialog_editor")
+local SlotPanel = require("mods.mapamap.components.slot_panel")
+
+-- Self-contained modal panels with a uniform contract, in priority order.
+-- MOUSE: component.mousepressed(ui, session, x, y, button) -> handled?;
+-- closeOnOutside closes the panel when its handler declines the press.
+-- KEYS: component.key(ui, session, key) (always treated as consumed).
+local MOUSE_MODALS = {
+  { key = "slotsOpen",    component = SlotPanel,    closeOnOutside = true },
+  { key = "encEditor",    component = EncEditor,    closeOnOutside = true },
+  { key = "partyEditor",  component = PartyEditor,  closeOnOutside = true },
+  { key = "dialogEditor", component = DialogEditor },
+}
+local KEY_MODALS = {
+  { key = "slotsOpen",    component = SlotPanel },
+  { key = "encEditor",    component = EncEditor },
+  { key = "partyEditor",  component = PartyEditor },
+  { key = "dialogEditor", component = DialogEditor },
+  { key = "details",      component = Details },
+  { key = "entityCreator", component = EntityCreator },
+}
 local BrushEditor = require("mods.mapamap.components.brush_editor")
 local EntitySelector = require("mods.mapamap.components.entity_selector")
 local EntityCreator = require("mods.mapamap.components.entity_creator")
@@ -45,6 +68,25 @@ local Brushes = require("mods.mapamap.domain.brushes")
 local Blueprints = require("mods.mapamap.domain.blueprints")
 local Paint = require("mods.mapamap.domain.paint")
 local State = require("mods.mapamap.storage.config")
+
+-- Self-contained modal panels with a uniform contract, in priority order.
+-- MOUSE: component.mousepressed(ui, session, x, y, button) -> handled?;
+-- closeOnOutside closes the panel when its handler declines the press.
+-- KEYS: component.key(ui, session, key) (always treated as consumed).
+local MOUSE_MODALS = {
+  { key = "slotsOpen",    component = SlotPanel,    closeOnOutside = true },
+  { key = "encEditor",    component = EncEditor,    closeOnOutside = true },
+  { key = "partyEditor",  component = PartyEditor,  closeOnOutside = true },
+  { key = "dialogEditor", component = DialogEditor },
+}
+local KEY_MODALS = {
+  { key = "slotsOpen",    component = SlotPanel },
+  { key = "encEditor",    component = EncEditor },
+  { key = "partyEditor",  component = PartyEditor },
+  { key = "dialogEditor", component = DialogEditor },
+  { key = "details",      component = Details },
+  { key = "entityCreator", component = EntityCreator },
+}
 
 local Input = {}
 
@@ -94,6 +136,16 @@ Input.brushSource = nil
 Input.showEntitySelector = false
 Input.entityCreator = nil
 
+-- Map Slots panel (components/slot_panel.lua): save-slot management for the
+-- whole edit-set.  slotSel is the selected slot name, slotRename the live
+-- rename buffer while typing, slotMsg the panel's last status message.
+Input.slotsOpen = false
+Input.slotSel = nil
+Input.slotRename = nil
+Input.slotScroll = 1
+Input.slotFileScroll = 1
+Input.slotMsg = nil
+
 -- Blueprint support: a rectangle-select capture mode.  Captured blueprints are
 -- stored whole as items in the inventory's Blueprints tab (the inventory is
 -- the single blueprint container; there is no separate book).
@@ -109,6 +161,24 @@ Input.selectedItem = nil    -- a live def.objects, def.warps or def.signs entry,
 Input.warpDestPick = false    -- arm "pick destination" for the selected warp
 Input.details = nil           -- { target, fields, index, editing } or nil
 Input.encEditor = nil         -- { session, fields, index, editing } or nil
+Input.partyEditor = nil       -- { session, class, partyIndex, obj, mode, ... } or nil
+Input.dialogEditor = nil      -- { text, curLine, curCol, caps, onSave } or nil
+-- MOVE button from Details arms this: the next world LMB relocates the entity
+-- instead of painting.
+Input.moveTarget = nil        -- { entity, entityType } or nil
+
+-- One home for "put every floating panel away" (Tab toggle, pointer cancel).
+-- Callers that need a specific subset clear their own fields instead.
+local function closeOverlays()
+  Input.details = nil
+  Input.encEditor = nil
+  Input.partyEditor = nil
+  Input.dialogEditor = nil
+  Input.showEntitySelector = false
+  Input.entityCreator = nil
+  Input.slotsOpen = false
+  Input.moveTarget = nil
+end
 
 -- The mod's press/release flags are event-driven; a release can be lost to a
 -- window focus flip, input recovery or a cancel, and then the brush would stay
@@ -200,8 +270,7 @@ end
 -- nothing stays armed waiting for a release that will never come.
 function Input.cancelled()
   Input.mouseButtons = { [1] = false, [2] = false, [3] = false }
-  Input.encEditor = nil
-  Input.entityCreator = nil
+  closeOverlays()
   Input.dragItem = nil
   Input.dragFromSlot = nil
   EditorTools.cancelled()
@@ -322,10 +391,7 @@ local function toggleInventory()
   if Input.showInventory then
     Input.showPicker = false
     Input.showBrushEditor = false
-    Input.details = nil
-    Input.encEditor = nil
-    Input.showEntitySelector = false
-    Input.entityCreator = nil
+    closeOverlays()
   end
   Input.showInventory = not Input.showInventory
 end
@@ -334,6 +400,7 @@ local function toggleEncounters(session)
   Input.showPicker = false
   Input.showEntitySelector = false
   Input.entityCreator = nil
+  Input.slotsOpen = false
   if Input.encEditor then
     Input.encEditor = nil
   else
@@ -348,6 +415,7 @@ local function togglePicker()
     -- The picker shares the selector's side-panel spot.
     Input.showEntitySelector = false
     Input.entityCreator = nil
+    Input.slotsOpen = false
     Input.showInventory = true
   end
   Input.pickerScroll = 1
@@ -366,6 +434,7 @@ local function toggleFactory(session)
     Input.showPicker = false
     Input.details = nil
     Input.encEditor = nil
+    Input.slotsOpen = false
     Input.showEntitySelector = true
     Input.showInventory = true
   end
@@ -386,6 +455,21 @@ local function toggleBrushMaker()
   end
 end
 
+-- Map Slots surface: the save-slot manager shares the side-panel spot with
+-- the picker/factory/encounter editor, so opening it closes those.
+local function toggleSlots()
+  Input.slotsOpen = not Input.slotsOpen
+  if Input.slotsOpen then
+    Input.showPicker = false
+    Input.showEntitySelector = false
+    Input.entityCreator = nil
+    Input.details = nil
+    Input.encEditor = nil
+    Input.slotMsg = nil
+    Input.showInventory = true
+  end
+end
+
 -- Mapping from toolbar button index to the toggle action.
 local TOOL_TOGGLES = {
   toggleInventory,
@@ -396,6 +480,7 @@ local TOOL_TOGGLES = {
   toggleBlueprint,
   toggleBrushMaker,
   toggleFactory,
+  toggleSlots,
 }
 
 -- ---------------------------------------------------------------------------
@@ -407,24 +492,36 @@ function Input.mousepressed(session, game, mx, my, button)
   button = normalizeMouseButton(button)
   if button then Input.mouseButtons[button] = true end
   local vw, vh = love.graphics.getDimensions()
-  -- A modal encounter editor is open: delegate to its mouse handler.
-  if Input.encEditor then
-    if EncEditor.mousepressed(Input, session, mx, my, button) then
-      return true
+  -- Self-contained modals (uniform mousepressed contract), in priority
+  -- order.  closeOnOutside: an outside click closes the panel; otherwise the
+  -- handler owns the whole press (the composer cancels on outside itself).
+  for _, m in ipairs(MOUSE_MODALS) do
+    if Input[m.key] then
+      if m.component.mousepressed(Input, session, mx, my, button) then
+        return true
+      end
+      if m.closeOnOutside then
+        if m.component.close then m.component.close(Input)
+        else Input[m.key] = nil end
+        return true
+      end
     end
-    -- Click was outside the panel: close the editor.
-    Input.encEditor = nil
-    return true
   end
   -- A modal Details panel is open: clicks outside it close it; anything else
   -- (including clicks on the panel) is consumed so the world never paints
   -- underneath.
   if Input.details then
     if Details.over(vw, vh, mx, my) then
-      -- A click on a field row selects it; only the DELETE row (an action
-      -- button) runs on click. Text editing starts with Enter, so a mouse
-      -- click never leaves an edit cursor stuck after release.
       if button == 1 then
+        -- Bottom action strip (MOVE / EDIT / REMOVE) takes priority.
+        local bid = Details.buttonAt(Input.details, vw, vh, mx, my)
+        if bid then
+          Details.pressButton(Input, session, Input.details, bid)
+          return true
+        end
+        -- A click on a field row selects it; in-field actions (encounters,
+        -- team) run on click. Text editing starts with Enter, so a mouse
+        -- click never leaves an edit cursor stuck after release.
         local idx = Details.hit(vw, vh, mx, my)
         local fields = Input.details.fields
         if idx and fields and idx <= #fields then
@@ -452,7 +549,8 @@ function Input.mousepressed(session, game, mx, my, button)
   if Input.showEntitySelector and button == 1 then
     local tIdx = EntitySelector.buttonAt(vw, vh, mx, my)
     if tIdx then
-      Input.openCreator(session, EntitySelector.TYPES[tIdx].key)
+      local t = EntitySelector.typeAt(tIdx, Gen.isGen2())
+      if t then Input.openCreator(session, t.key) end
       return true
     end
     if EntitySelector.over(vw, vh, mx, my) then return true end
@@ -632,14 +730,34 @@ function Input.mousepressed(session, game, mx, my, button)
   end
   -- World paint / erase.
   if button == 1 then
+    -- A pending MOVE from the Details strip: land the carried entity on this
+    -- cell instead of painting/picking up.
+    if Input.moveTarget then
+      local mt = Input.moveTarget
+      Input.moveTarget = nil
+      local t = Coords.transform(session.game)
+      if t then
+        local tx, ty = Coords.toWorldCell(t, mx, my)
+        local et = mt.entityType
+        if et == "warp" then
+          session:moveWarp(mt.entity, tx, ty)
+        elseif et == "object" then
+          session:moveObject(mt.entity, tx, ty)
+        elseif et == "sign" then
+          session:moveSign(mt.entity, tx, ty)
+        end
+      end
+      return true
+    end
     -- Click on a world entity: copy it to the active hotbar slot instead of
-    -- painting, so the user can pick it up with LMB.
+    -- painting, so the user can pick it up with LMB.  Neighbor-aware: an
+    -- entity on another laid-out map is picked up as a copy of itself.
     local t = Coords.transform(session.game)
     local pickedEntity, pickedType
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
-      pickedEntity, pickedType = session:entityAt(tx, ty)
+      pickedEntity, pickedType = session:entityAtWorld(tx, ty)
     end
     if pickedEntity then
       session.selectedItem = pickedEntity
@@ -680,9 +798,19 @@ function Input.mousepressed(session, game, mx, my, button)
     if t then
       local tx, ty = Coords.toWorldCell(t, mx, my)
       session.cursorBx, session.cursorBy = tx, ty
-      entity, entityType = session:entityAt(tx, ty)
+      -- Neighbor-aware: entities on OTHER laid-out maps open read-only
+      -- Details instead of the erase/drag verbs (the session's mutators are
+      -- bound to the current map's def).
+      local ent, et, ownerDef = session:entityAtWorld(tx, ty)
+      if ent and ownerDef ~= session.def then
+        session.selectedItem = ent
+        EditorTools.deferEntityClick(et, ent, mx, my, true)
+        return true
+      end
+      entity, entityType = ent, et
       if not entity then
-        mapId, mapDef = Neighbors.mapAt(session.def, session.neighbors, tx, ty)
+        mapId, mapDef = Neighbors.mapAt(session.def, session.neighbors,
+          tx, ty)
       end
     end
     if entity then
@@ -747,7 +875,8 @@ function Input.mousereleased(session, mx, my, button)
     local pc = EditorTools.takeEntityClick()
     if pc then
       local et = pc.entityType or pc.kind
-      Input.openDetails(session, { entity = pc.entity, entityType = et })
+      Input.openDetails(session, { entity = pc.entity, entityType = et,
+        readOnly = pc.readOnly })
       return true
     end
     -- Right-click (no drag) on a map body: open its Details to rename it.
@@ -820,6 +949,11 @@ function Input.wheelmoved(session, dy)
   if not session then return false end
   local vw, vh = love.graphics.getDimensions()
   local mx, my = love.mouse.getPosition()
+  -- Map Slots: scroll whichever section (slots list / export files) the
+  -- wheel is over; consume so it never cycles the hotbar underneath.
+  if Input.slotsOpen and SlotPanel.over(vw, vh, mx, my) then
+    return SlotPanel.scroll(Input, session, dy)
+  end
   -- The Brush Maker has nothing to scroll; consume the wheel so it never
   -- cycles the hotbar underneath.
   if Input.showBrushEditor and BrushEditor.over(vw, vh, mx, my) then
@@ -867,17 +1001,30 @@ function Input.wheelmoved(session, dy)
     EncEditor.scrollSpecies(Input, dy)
     return true
   end
+  -- Party editor: consume the wheel over the panel (scrolls the open
+  -- species dropdown) so it never cycles the hotbar underneath.
+  if Input.partyEditor and PartyEditor.over(vw, vh, mx, my) then
+    PartyEditor.scroll(Input, dy)
+    return true
+  end
   return false
 end
 
 -- Keyboard: returns true when the key was consumed by the overlay.
 function Input.keypressed(session, key)
-  -- Modal panels own the keyboard while open; encounter editor takes priority
-  -- over Details since it's a deeper workflow.  The Entity Creator form sits
-  -- at the same level: while open it consumes keys (Esc closes it).
-  if Input.encEditor then return EncEditor.key(Input, session, key) end
-  if Input.details then return Input.keyDetails(session, key) end
-  if Input.entityCreator then return EntityCreator.key(Input, session, key) end
+  -- Modal panels own the keyboard while open, in priority order (all share
+  -- the uniform key(ui, session, key) contract).
+  for _, m in ipairs(KEY_MODALS) do
+    if Input[m.key] then
+      return m.component.key(Input, session, key) or true
+    end
+  end
+  -- A pending MOVE relocation is cancelled by Escape (not intercepted by
+  -- modals since Details was closed when MOVE was armed).
+  if key == "escape" and Input.moveTarget then
+    Input.moveTarget = nil
+    return true
+  end
   if key == "n" then
     toggleEncounters(session)
     return true
@@ -896,6 +1043,9 @@ function Input.keypressed(session, key)
     return true
   elseif key == "m" then
     toggleBrushMaker()
+    return true
+  elseif key == "v" then
+    toggleSlots()
     return true
   elseif key == "tab" then
     toggleInventory()

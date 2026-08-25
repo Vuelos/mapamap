@@ -12,6 +12,7 @@ local Warps = require("mods.mapamap.domain.warps")
 local Encounters = require("mods.mapamap.domain.encounters")
 local Objects = require("mods.mapamap.domain.objects")
 local Signs = require("mods.mapamap.domain.signs")
+local TrainerParty = require("mods.mapamap.domain.trainer_party")
 local MapGrid = require("mods.mapamap.domain.map_grid")
 local Graft = require("mods.mapamap.engine.graft")
 local Gen = require("mods.mapamap.engine.gen")
@@ -26,6 +27,7 @@ mixin(EditSession, Warps)
 mixin(EditSession, Encounters)
 mixin(EditSession, Objects)
 mixin(EditSession, Signs)
+mixin(EditSession, TrainerParty)
 
 -- Resolves the UI font the overlay draws labels with.  Prefers the mod's
 -- ui.Font (set by map_editor or another mod), falls back to the active LOVE
@@ -326,6 +328,42 @@ end
 -- map.  `exclude` is an optional entity table to skip.
 function EditSession:cellOccupied(cellX, cellY, exclude)
   return self:entityAt(cellX, cellY, exclude) ~= nil
+end
+
+-- World-wide entity lookup: like entityAt, but when the current map has
+-- nothing at the cell the laid-out NEIGHBOR owning that cell is scanned too
+-- (the same rule the overlay's hover markers follow), including gen-2
+-- readable bgEvents as signs.  Returns
+--   entity, type, ownerDef, localCellX, localCellY, isNeighbor
+-- or nil.  Callers that MUTATE should check isNeighbor: the session's
+-- placement/removal ops are bound to the current map's def.
+function EditSession:entityAtWorld(cellX, cellY)
+  local ent, et = self:entityAt(cellX, cellY)
+  if ent then
+    return ent, et, self.def, cellX, cellY, false
+  end
+  local Neighbors = require("mods.mapamap.domain.neighbors")
+  local _, def, ox, oy = Neighbors.mapAt(self.def, self.neighbors,
+    cellX, cellY)
+  if not def or def == self.def then return nil end
+  local lx = math.floor((cellX * Common.CELL_PX - (ox or 0)) / Common.CELL_PX)
+  local ly = math.floor((cellY * Common.CELL_PX - (oy or 0)) / Common.CELL_PX)
+  local lists = {
+    { list = def.objects,  type = "object" },
+    { list = def.warps,    type = "warp" },
+    { list = def.signs,    type = "sign" },
+    -- Gen 2 keeps readable background events (kinds 0-6) instead of signs.
+    { list = def.bgEvents, type = "sign", bgOnly = true },
+  }
+  for _, l in ipairs(lists) do
+    for _, ent2 in ipairs(l.list or {}) do
+      local kindOk = (not l.bgOnly) or ((ent2.kind or 0) <= 6)
+      if kindOk and (ent2.x or -1) == lx and (ent2.y or -1) == ly then
+        return ent2, l.type, def, lx, ly, true
+      end
+    end
+  end
+  return nil
 end
 
 return EditSession

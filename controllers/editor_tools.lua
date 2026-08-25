@@ -91,10 +91,13 @@ end
 
 -- RMB press over an entity: defer the click-vs-drag decision until the
 -- pointer either stops (Details click) or moves past the threshold (drag).
--- `entityType` is "warp", "object", or "sign".
-function Tools.deferEntityClick(entityType, entity, mx, my)
+-- `entityType` is "warp", "object", or "sign".  `readOnly` marks entities
+-- living on another laid-out map: they open read-only Details and can never
+-- become drags (the session's move ops are bound to the current map).
+function Tools.deferEntityClick(entityType, entity, mx, my, readOnly)
   local b = Tools.brush
-  b.pendingEntityClick = { kind = "entity", entityType = entityType, entity = entity, mx = mx, my = my }
+  b.pendingEntityClick = { kind = "entity", entityType = entityType,
+    entity = entity, mx = mx, my = my, readOnly = readOnly or false }
   b.erasing = false
   b.painting = false
 end
@@ -129,6 +132,9 @@ function Tools.maybeDragEntity(session, mx, my)
   local b = Tools.brush
   local pc = b.pendingEntityClick
   if not pc then return false end
+  -- Read-only (other-map) entities never become drags: the release will open
+  -- their Details instead.
+  if pc.readOnly then return false end
   local dx, dy = mx - pc.mx, my - pc.my
   if dx * dx + dy * dy <= 25 then return false end
   b.pendingEntityClick = nil

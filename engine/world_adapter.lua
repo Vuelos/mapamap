@@ -138,23 +138,11 @@ function WorldAdapter.flushLiveRebuild(session)
 end
 
 -- Rebuilds the overworld's live NPC list for the current map from def.objects.
+-- The implementation lives on the session (domain/objects.lua) -- including
+-- the Gen 2 delegation to World:rebuildPeople -- so there is exactly one.
 function WorldAdapter.refreshObjects(session)
-  WorldAdapter.registerTalkTexts(session)
-  local ow = session.game and Gen.overworld(session.game)
-  if not (ow and ow.map and ow.map.id == session.mapId) then return false end
-  local fn = ow.pooledNPC
-  if not fn then return false end
-  ow.npcs = {}
-  for _, obj in ipairs(session.def.objects or {}) do
-    local npc = fn(ow.npcPool, session.data, session.mapId, obj)
-    npc.frozen = false
-    table.insert(ow.npcs, npc)
-  end
-  if ow.player then
-    ow.entities = { ow.player }
-    for _, n in ipairs(ow.npcs) do table.insert(ow.entities, n) end
-  end
-  return true
+  if not (session and session.refreshObjects) then return false end
+  return session:refreshObjects()
 end
 
 -- Reloads every renderer built on `tilesetId` after a graft grew its atlas.
@@ -254,6 +242,58 @@ function WorldAdapter.registerTalkTexts(session)
   end
   local talk, n = {}, 0
   local function add(ent)
+    -- Sleeping blockers get a WILD-BATTLE handler instead of a text box:
+    -- the marker key is unique per placement, the battle is catchable, and
+    -- winning/catching marks save.defeatedTrainers so refreshObjects stops
+    -- spawning it (vanilla snorlax semantics).  Gen 1 only: gen 2 talks run
+    -- through the VM scriptKey pipeline.
+    if ent.blocker and type(ent.text) == "string" and ent.text ~= "" then
+      local BattleStateOk, BattleState = pcall(require,
+        "src.battle.BattleState")
+      if not BattleStateOk then return end
+      talk[ent.text] = function(game, _ow, npc, done)
+        local def = npc and npc.def or ent
+        local blk = def.blocker or {}
+        -- Vanilla gate: a sleeping blocker only wakes for the POKé FLUTE.
+        -- Without it the press prints the snore line and nothing happens.
+        local inv = game.save and game.save.inventory
+        if not (inv and inv.POKE_FLUTE) then
+          local TextBox = require("src.render.TextBox")
+          game.stack:push(TextBox.new(game,
+            "SNORLAX is snoring\naway...", done))
+          return
+        end
+        local battle = BattleState.newWild(game, blk.species,
+          blk.level or 30)
+        local prevFinish = battle.onFinish
+        battle.onFinish = function(result)
+          if result == "win" or result == "caught" then
+            game.save.defeatedTrainers = game.save.defeatedTrainers or {}
+            game.save.defeatedTrainers[npc and npc.id
+              or (session.mapId .. "_obj_" .. tostring(def.index))] = true
+            -- The session rebuilds live NPCs from defs; drop it right away.
+            if session.refreshObjects then pcall(session.refreshObjects, session) end
+          end
+          if prevFinish then prevFinish(result) end
+        end
+        game.stack:push(battle)
+        if done then done() end
+      end
+      n = n + 1
+      return
+    end
+    if ent.healing then
+      local text = ent.text
+      if type(text) == "string" and text ~= "" then
+        talk[text] = function(game, _ow, npc, done)
+          if _ow and type(_ow.nurseHeal) == "function" then
+            _ow:nurseHeal(done, npc)
+          end
+        end
+        n = n + 1
+      end
+      return
+    end
     local text = ent and ent.text
     if type(text) ~= "string" or text == "" or text:sub(1, 5) == "TEXT_" then
       return
@@ -263,8 +303,27 @@ function WorldAdapter.registerTalkTexts(session)
     -- re-registration; signs pass npc = nil and fall back to the keyed text.
     talk[text] = function(game, _ow, npc, done)
       local TextBox = require("src.render.TextBox")
-      local live = npc and npc.def and npc.def.text or text
-      game.stack:push(TextBox.new(game, live, done))
+      local def = npc and npc.def or ent
+      local live = (type(def.text) == "string" and def.text ~= ""
+                    and def.text:sub(1, 1) ~= "\1") and def.text or nil
+      -- One-time gift item: given once per placement, then just dialog after.
+      local key = session.mapId .. "_obj_" .. tostring(def.index)
+      local save = game.save
+      if type(def.prizeItem) == "string" and def.prizeItem ~= ""
+          and save and not (save.giftsGiven and save.giftsGiven[key]) then
+        local CommandsOk, Commands = pcall(require, "src.script.Commands")
+        if CommandsOk and Commands and Commands.give_item then
+          Commands.give_item({ game = game, save = save },
+            def.prizeItem, tonumber(def.prizeCount) or 1)
+          save.giftsGiven = save.giftsGiven or {}
+          save.giftsGiven[key] = true
+        end
+      end
+      if live then
+        game.stack:push(TextBox.new(game, live, done))
+      elseif done then
+        done()
+      end
     end
     n = n + 1
   end

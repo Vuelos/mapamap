@@ -24,8 +24,12 @@ local SUITES = {
   require("mods.mapamap.tests.graft_palette_tests"),
   require("mods.mapamap.tests.warp_tests"),
   require("mods.mapamap.tests.object_tests"),
+  require("mods.mapamap.tests.trainer_tests"),
+  require("mods.mapamap.tests.dialog_tests"),
+  require("mods.mapamap.tests.entity_extra_tests"),
   require("mods.mapamap.tests.details_tests"),
   require("mods.mapamap.tests.brush_tests"),
+  require("mods.mapamap.tests.slots_tests"),
 }
 
 local allOk = true
@@ -33,10 +37,13 @@ local allOk = true
 for _, suite in ipairs(SUITES) do
   if suite.setup then suite.setup() end
   local failed = {}
-  for _, name in ipairs(suite.tests) do
-    local ok, err = pcall(_G[name])
+  for _, t in ipairs(suite.tests) do
+    -- Entries are either legacy global names or direct function references.
+    local fn = (type(t) == "function") and t or _G[t]
+    local ok, err = pcall(fn)
     if not ok then
-      failed[#failed + 1] = name .. ": " .. tostring(err)
+      failed[#failed + 1] = (type(t) == "string" and t or tostring(fn))
+        .. ": " .. tostring(err)
       allOk = false
     end
   end
