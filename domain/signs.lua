@@ -68,6 +68,7 @@ end
 function Signs:placeSignCopy(cellX, cellY, sample)
   if not cellIn(self.def, cellX, cellY) then return nil end
   if not (sample and sample.text) then return nil end
+  if self:cellOccupied(cellX, cellY) then return nil end
   if self.undo then self.undo:capture(self.def) end
   self.def.signs = self.def.signs or {}
   local nextIndex = EditOps.nextIndex(self.def.signs)

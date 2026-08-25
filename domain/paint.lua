@@ -10,7 +10,6 @@ local Coords = require("mods.mapamap.engine.coords")
 local Neighbors = require("mods.mapamap.domain.neighbors")
 local WorldAdapter = require("mods.mapamap.engine.world_adapter")
 local Hotbar = require("mods.mapamap.components.hotbar")
-local Details = require("mods.mapamap.components.details")
 local Blueprints = require("mods.mapamap.domain.blueprints")
 local Objects = require("mods.mapamap.domain.objects")
 local Warps = require("mods.mapamap.domain.warps")
@@ -58,18 +57,34 @@ function Paint.paintAt(ui, brush, session, mx, my)
   if tx == brush.lastCellX and ty == brush.lastCellY then return false end
   brush.lastCellX, brush.lastCellY = tx, ty
 
+  -- Which laid-out map owns this cell: entity placements follow the cursor
+  -- across seams (blocks resolve their own target below).
+  local target = session:targetAt(tx, ty)
+
   -- Sprites place NPC objects, one per block cell.
   if item.kind == "sprite" then
     session.cursorBx = tx
     session.cursorBy = ty
-    return session:placeSprite(item.id)
+    local ok = session:withTargetDef(target, function()
+      return session:placeSprite(item.id)
+    end)
+    if ok and target and target.neighbor then
+      session:refreshNeighborMap(target.mapId)
+    end
+    return ok or false
   end
 
   -- Items place map-item objects, one per block cell.
   if item.kind == "item" then
     session.cursorBx = tx
     session.cursorBy = ty
-    return session:placeItem(item.id)
+    local ok = session:withTargetDef(target, function()
+      return session:placeItem(item.id)
+    end)
+    if ok and target and target.neighbor then
+      session:refreshNeighborMap(target.mapId)
+    end
+    return ok or false
   end
 
   -- Entities place a warp / object / sign at the cursor depending on
@@ -78,34 +93,37 @@ function Paint.paintAt(ui, brush, session, mx, my)
   if item.kind == "entity" then
     session.cursorBx = tx
     session.cursorBy = ty
-    local et = item.entityType
-    if et == "warp" then
-      if item.create then
-        return session:placeWarp(tx, ty, item.create.destMap,
-          item.create.destWarp) ~= nil
+    local placed
+    session:withTargetDef(target, function(cx, cy)
+      local et = item.entityType
+      if et == "warp" then
+        if item.create then
+          placed = session:placeWarp(cx, cy, item.create.destMap,
+            item.create.destWarp)
+        else
+          placed = session:placeWarp(cx, cy, item.destMap, item.destWarp)
+        end
+      elseif et == "object" then
+        if item.create then
+          placed = session:placeObjectSpec(cx, cy, item.create)
+        else
+          placed = session:placeObjectCopy(cx, cy, item.obj)
+        end
+      elseif et == "sign" then
+        if item.create then
+          placed = session:placeSignSpec(cx, cy, item.create)
+        else
+          -- A picked-up sign tool carries its source: painting it CLONES
+          -- the message silently (editing happens via right-click Details).
+          placed = session:placeSignCopy(cx, cy, item.sign)
+        end
       end
-      return session:placeWarp(tx, ty, item.destMap, item.destWarp) ~= nil
-    elseif et == "object" then
-      if item.create then
-        local o = session:placeObjectSpec(tx, ty, item.create)
-        if o then session.selectedItem = o end
-        return o ~= nil
-      end
-      return session:placeObjectCopy(tx, ty, item.obj) ~= nil
-    elseif et == "sign" then
-      if item.create then
-        local s = session:placeSignSpec(tx, ty, item.create)
-        if s then session.selectedItem = s end
-        return s ~= nil
-      end
-      local s = session:placeNewSign(tx, ty)
-      if s then
-        session.selectedItem = s
-        Details.open(ui, session, { entity = s, entityType = "sign" })
-      end
-      return s ~= nil
+      if placed then session.selectedItem = placed end
+    end)
+    if placed and target and target.neighbor then
+      session:refreshNeighborMap(target.mapId)
     end
-    return false
+    return placed ~= nil
   end
 
   -- Blueprints stamp a block grid at the cursor block.
@@ -201,21 +219,29 @@ function Paint.eraseAt(ui, brush, session, mx, my)
   if item and (item.kind == "sprite" or item.kind == "entity") then
     session.cursorBx = tx
     session.cursorBy = ty
-    if item.kind == "entity" then
-      local et = item.entityType
-      if et == "warp" then
-        local w = session:warpAt(tx, ty)
-        if w then session:removeWarp(w) end
-      elseif et == "object" then
-        session:eraseObjectsAtCell()
-      elseif et == "sign" then
-        session:eraseSignsAtCell()
+    -- Entity erases follow the cursor across seams like placements do.
+    local target = session:targetAt(tx, ty)
+    local changed = false
+    session:withTargetDef(target, function()
+      if item.kind == "entity" then
+        local et = item.entityType
+        if et == "warp" then
+          local w = session:warpAt(session.cursorBx, session.cursorBy)
+          if w then changed = session:removeWarp(w) or changed end
+        elseif et == "object" then
+          changed = session:eraseObjectsAtCell() or changed
+        elseif et == "sign" then
+          changed = session:eraseSignsAtCell() or changed
+        end
+      else
+        changed = session:eraseObjectsAtCell() or changed
       end
-    else
-      session:eraseObjectsAtCell()
+    end)
+    if changed and target and target.neighbor then
+      session:refreshNeighborMap(target.mapId)
     end
     session:refreshLiveRenderers()
-    return session.mapChanged
+    return session.mapChanged or changed
   end
   session.cursorBx = tx - (tx % 2)
   session.cursorBy = ty - (ty % 2)
@@ -232,6 +258,7 @@ function Paint.destPick(ui, session, mx, my)
   local t = Coords.transform(session.game)
   if not t then return true end
   local tx, ty = Coords.toWorldCell(t, mx, my)
+  if not tx or not ty then return true end
   local mapId, def, ox, oy = Neighbors.mapAt(session.def, session.neighbors, tx, ty)
   if def then
     if session:connectWarpToCell(session.selectedItem,

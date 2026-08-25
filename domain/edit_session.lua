@@ -6,6 +6,7 @@
 local Common = require("mods.mapamap.common")
 local Snapshot = require("mods.mapamap.domain.snapshot")
 local Undo = require("mods.mapamap.domain.undo")
+local EditOps = require("mods.mapamap.domain.edit_ops")
 local MapOps = require("mods.mapamap.domain.map_ops")
 local EditorNeighbors = require("mods.mapamap.domain.editor_neighbors")
 local Warps = require("mods.mapamap.domain.warps")
@@ -303,6 +304,57 @@ function EditSession:cellInsideNeighbor(cellX, cellY)
   return false
 end
 
+-- The laid-out map owning a WORLD cell, resolved for placements / moves /
+-- erases: the edited map itself (neighbor = false, world == local cells) or
+-- a laid-out neighbor (neighbor = true, cellX/cellY converted into the
+-- owner's local walk grid).  Nil over open void.  Shape:
+--   { def, mapId, cellX, cellY, neighbor }
+function EditSession:targetAt(cellX, cellY)
+  if not cellX or not cellY then return nil end
+  local Neighbors = require("mods.mapamap.domain.neighbors")
+  local mapId, def, ox, oy = Neighbors.mapAt(self.def, self.neighbors,
+    cellX, cellY)
+  if not def then return nil end
+  if def == self.def then
+    return { def = def, mapId = self.mapId, cellX = cellX, cellY = cellY,
+             neighbor = false }
+  end
+  local lx = math.floor((cellX * Common.CELL_PX - (ox or 0)) / Common.CELL_PX)
+  local ly = math.floor((cellY * Common.CELL_PX - (oy or 0)) / Common.CELL_PX)
+  return { def = def, mapId = mapId, cellX = lx, cellY = ly,
+           neighbor = true }
+end
+
+-- Runs fn with the placement context (def / mapId / cursor cell) pointed at
+-- `target` -- the CURRENT map passes straight through; a laid-out NEIGHBOR
+-- is swapped in for the duration so the whole place*/move*/erase* family
+-- (all reading self.def and self.cursorBx) serves both targets unchanged.
+-- The context is always restored; fn receives the target's local cell.
+function EditSession:withTargetDef(target, fn)
+  if not target then return nil end
+  if not target.neighbor then
+    return fn(target.cellX, target.cellY)
+  end
+  local oDef, oMapId = self.def, self.mapId
+  local oCx, oCy = self.cursorBx, self.cursorBy
+  self.def, self.mapId = target.def, target.mapId
+  self.cursorBx, self.cursorBy = target.cellX, target.cellY
+  local ok, res = pcall(fn, target.cellX, target.cellY)
+  self.def, self.mapId = oDef, oMapId
+  self.cursorBx, self.cursorBy = oCx, oCy
+  if not ok then error(res, 0) end
+  return res
+end
+
+-- Runtime refresh after an edit to a NEIGHBOR map's def: neighbor strips
+-- (gen 1 NPC pooling) and ghost entities (gen 2 rebuildPeople) are rebuilt
+-- from defs, so flag the diff for persistence and nudge the runtime caches.
+function EditSession:refreshNeighborMap(mapId)
+  self.neighborDirty[mapId] = true
+  WorldAdapter.rebuildRuntimeNeighbors(self)
+  self:refreshObjects()
+end
+
 -- Returns the warp, object, or sign occupying a walk-grid cell on the edited
 -- map plus its type tag ("object" | "warp" | "sign"), or nil.  Priority is
 -- object > warp > sign (the order every pick/erase chain used).  `exclude`
@@ -364,6 +416,76 @@ function EditSession:entityAtWorld(cellX, cellY)
     end
   end
   return nil
+end
+
+-- Moves a placed entity to a WORLD cell, following whichever laid-out map
+-- owns the destination: same-owner moves run the plain mutator under the
+-- target context; a seam-crossing drag lifts the entity out of its owner
+-- list and re-inserts it (fresh index) on the destination map.  Both defs
+-- are captured first so Ctrl+Z restores the pair -- restoreSnapshot routes
+-- each step by its snap.mapId.
+function EditSession:relocateEntityWorld(entity, entityType, worldX, worldY)
+  if not entity then return false end
+  local target = self:targetAt(worldX, worldY)
+  if not target then return false end
+  local mover = (entityType == "warp" and self.moveWarp)
+    or (entityType == "object" and self.moveObject)
+    or (entityType == "sign" and self.moveSign)
+  if not mover then return false end
+
+  -- Find the laid-out map whose lists currently hold the entity.
+  local owners = { { def = self.def, id = nil } }
+  for _, nb in ipairs(self.neighbors or {}) do
+    owners[#owners + 1] = nb
+  end
+  local ownerKey, ownerDef, ownerMapId
+  for _, o in ipairs(owners) do
+    for _, key in ipairs({ "objects", "warps", "signs" }) do
+      for _, e in ipairs(o.def[key] or {}) do
+        if e == entity then
+          ownerKey, ownerDef, ownerMapId = key, o.def, o.id
+          break
+        end
+      end
+      if ownerKey then break end
+    end
+    if ownerKey then break end
+  end
+  if not ownerKey then return false end
+
+  -- Same owner: plain move under the target context (covers neighbor-local
+  -- drags as well as current-map ones).
+  if ownerDef == target.def then
+    return self:withTargetDef(target, function(cx, cy)
+      return mover(self, entity, cx, cy)
+    end)
+  end
+
+  -- Seam-crossing relocation.
+  if self.undo then
+    self.undo:capture(ownerDef, nil, nil, ownerMapId)
+    self.undo:capture(target.def, nil, nil,
+      target.neighbor and target.mapId or nil)
+  end
+  local list = ownerDef[ownerKey]
+  for i, e in ipairs(list) do
+    if e == entity then table.remove(list, i) break end
+  end
+  entity.x, entity.y = target.cellX, target.cellY
+  local destList = target.def[ownerKey] or {}
+  entity.index = EditOps.nextIndex(destList)
+  target.def[ownerKey] = destList
+  table.insert(destList, entity)
+  if ownerMapId and ownerMapId ~= self.mapId then
+    self:refreshNeighborMap(ownerMapId)
+  elseif target.neighbor then
+    self:refreshNeighborMap(target.mapId)
+  else
+    self:refreshLiveRenderers()
+    self:refreshObjects()
+  end
+  self.selectedItem = entity
+  return true
 end
 
 return EditSession
