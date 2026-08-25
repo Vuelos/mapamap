@@ -570,7 +570,7 @@ function EncEditor.draw(session, state, vw, vh, font)
       love.graphics.setColor(0.5, 0.5, 0.55, 0.5)
     end
     love.graphics.rectangle("line", bx, by, bw, bh)
-    Text.label(font, "+ Add row", bx + 4, by + 3, 2,
+    Text.label(font, "ADD ROW", bx + 4, by + 3, 2,
       { bg = Panel.CHIP_TITLE, padX = 2, padY = 1 })
     Panel.resetColor()
   end
