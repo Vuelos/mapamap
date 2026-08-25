@@ -19,6 +19,7 @@ local Objects = require("mods.mapamap.domain.objects")
 local Common = require("mods.mapamap.common")
 local Details = require("mods.mapamap.components.details")
 local EntityCreator = require("mods.mapamap.components.entity_creator")
+local Warps = require("mods.mapamap.domain.warps")
 local T = require("mods.mapamap.tests.test_util")
 T.bind(Data, Session)
 
@@ -537,6 +538,82 @@ local function test_rmbDragDoesNotMoveEntities()
   unstub()
 end
 
+-- The warp form's NEW MAP row mints a fresh map on a free edge and re-points
+-- the draft's destination at it; CREATE then arms a warp leading there.
+local function test_warpCreatorNewMapDestination()
+  local s = freshSession()
+  local ui = { hotbar = {}, selected = 1,
+    inventory = { items = {}, tab = 2, scroll = 1 } }
+  EntityCreator.open(ui, s, "warp")
+  local d = ui.entityCreator
+  local before = 0
+  for _ in pairs(Data.maps) do before = before + 1 end
+
+  assert(EntityCreator.createNewDestMap(ui, s, d),
+    "NEW MAP succeeds while an edge is free")
+  local newId
+  for _, f in ipairs(d.fields) do
+    if f.key == "destMap" then newId = f.value end
+    if f.key == "destWarp" then assert(f.value == "0", "warp # resets to 0") end
+  end
+  assert(newId and Data.maps[newId], "a fresh map def was created")
+  assert(newId ~= s.mapId, "the destination is not the edited map")
+  local after = 0
+  for _ in pairs(Data.maps) do after = after + 1 end
+  assert(after == before + 1, "exactly one map was minted")
+  -- Laid out + walkable: connected to the edited map.
+  local wired
+  for _, c in pairs(Data.maps[newId].connections or {}) do
+    if c and (c.mapGroup or c.id or true) then wired = true break end
+  end
+  assert(wired ~= nil, "the destination carries a connection entry")
+  assert(s._newMaps and s._newMaps[newId] ~= nil,
+    "the destination is tracked for persistence")
+  -- A second press mints ANOTHER map, not a duplicate id.
+  assert(EntityCreator.createNewDestMap(ui, s, d))
+  local secondId
+  for _, f in ipairs(d.fields) do
+    if f.key == "destMap" then secondId = f.value end
+  end
+  assert(secondId ~= newId, "each NEW MAP is a fresh destination")
+
+  -- COMMIT arms a warp tool pointing at the latest minted map.
+  EntityCreator.commit(ui, s)
+  local tool = ui.hotbar[ui.selected]
+  assert(tool and tool.kind == "entity" and tool.entityType == "warp"
+    and tool.create.destMap == secondId,
+    "CREATE arms a warp leading to the minted map")
+
+  s.data.maps[newId] = nil
+  s.data.maps[secondId] = nil
+end
+
+-- Warps.destPreview resolves where a warp points: laid-out root/neighbor
+-- maps with their offsets, the warp # cell, and unknown maps as unresolved.
+local function test_destPreviewResolvesDestinations()
+  local s, east = sessionWithEastNeighbor()
+  -- Root map: warp #1 (index 1) sits at its own x/y.
+  s.def.warps = { { x = 3, y = 4, destMap = "EAST_NB", destWarp = 0 } }
+  local root = Warps.destPreview(s, s.mapId, 0)
+  assert(root and root.laidOut and root.def == s.def and root.ox == 0,
+    "root destinations resolve at offset 0,0")
+  assert(root.cellX == 3 and root.cellY == 4,
+    "the cell comes from the destination warp entry")
+  -- Neighbor destination by id.
+  east.warps = { { x = 0, y = 2 } }
+  local nb = Warps.destPreview(s, "EAST_NB", 0)
+  assert(nb and nb.laidOut and nb.def == east and nb.cellX == 0
+    and nb.cellY == 2, "neighbor destinations resolve with their offsets")
+  -- Missing warp # falls back to the map center.
+  east.warps = {}
+  local center = Warps.destPreview(s, "EAST_NB", 5)
+  assert(center.cellX == 1 and center.cellY == 1,
+    "an out-of-range warp # previews the map center")
+  -- Unknown ids resolve nothing.
+  assert(Warps.destPreview(s, "NOWHERE", 0) == nil, "unknown ids are nil")
+  assert(Warps.destPreview(s, nil, 0) == nil, "nil ids are nil")
+end
+
 local suite = T.suite("MAPAMAP_ENTITY_EXTRAS", {
   cutTreeResolver,
   headbuttBlockResolverUsesCollisionTile,
@@ -556,6 +633,8 @@ local suite = T.suite("MAPAMAP_ENTITY_EXTRAS", {
   test_signPickPaintClonesMessageWithoutDetails,
   test_rmbClickOpensDetailsOnAnyEntity,
   test_rmbDragDoesNotMoveEntities,
+  test_warpCreatorNewMapDestination,
+  test_destPreviewResolvesDestinations,
 })
 
 suite.teardown = teardown

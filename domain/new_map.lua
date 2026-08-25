@@ -136,4 +136,25 @@ function NewMap.createConnectedMap(self, side)
   return NewMap.createSidedMap(self, side, 0)
 end
 
+-- Creates a fresh map to serve as a WARP DESTINATION: built like any grid
+-- expansion (flush against the edited map on the first free edge, walkable,
+-- rendered) but WITHOUT adopting it as the editing target -- the editor
+-- stays on the current map.  Tracked under _newMaps so it persists like the
+-- rest of the created grid.  Returns the new id, or nil when every edge is
+-- blocked.
+function NewMap.createWarpDestination(self)
+  for _, side in ipairs({ "east", "south", "west", "north" }) do
+    local newId = NewMap.createConnectedMap(self, side)
+    if newId then
+      self._newMaps = self._newMaps or {}
+      self._newMaps[newId] = Common.deepCopy(self.data.maps[newId])
+      -- Re-derive the laid-out neighbor set so the overlay can preview the
+      -- destination and the runtime renders/walks it immediately.
+      self:rebuildNeighbors()
+      return newId
+    end
+  end
+  return nil
+end
+
 return NewMap

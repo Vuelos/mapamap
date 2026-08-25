@@ -360,12 +360,14 @@ end
 -- engine-side (wires reciprocal connections into live data); every session
 -- re-pointing step (dirty-bookkeeping, undo reset, renderer reload) lives in
 -- EditSession:adoptNewMap so there is exactly one adoption implementation.
+-- Returns the new map id.
 function WorldAdapter.createAdjacentMap(session, side)
   local NewMap = require("mods.mapamap.domain.new_map")
   local newId = NewMap.createConnectedMap(session, side)
-  if not newId then return end
+  if not newId then return nil end
   session:adoptNewMap(newId)
   WorldAdapter.rebuildRuntimeNeighbors(session)
+  return newId
 end
 
 -- Reconciles the session when the player walks across map borders.

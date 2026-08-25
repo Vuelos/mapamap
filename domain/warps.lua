@@ -139,4 +139,39 @@ function Warps.connectWarpToCell(self, warp, destMapId, cellX, cellY)
   return true
 end
 
+-- Resolves where a warp points, for the overlay's edit-time preview:
+--   { def, ox, oy, cellX, cellY, laidOut, label }
+-- `def` is the destination map's def (nil for unknown ids); ox/oy are its
+-- world-pixel offsets when it is one of the LAID-OUT maps (root or a
+-- neighbor -- laidOut=true), else nil; the cell is the destination warp
+-- entry's own position (warp # is 0-based), falling back to the map center.
+function Warps.destPreview(self, destMap, destWarp)
+  if not destMap then return nil end
+  local def = self.data.maps and self.data.maps[destMap]
+  if not def then return nil end
+  local ox, oy, laidOut
+  if destMap == self.mapId then
+    ox, oy, laidOut = 0, 0, true
+  else
+    for _, nb in ipairs(self.neighbors or {}) do
+      if nb.id == destMap then ox, oy, laidOut = nb.ox, nb.oy, true break end
+    end
+  end
+  local idx = math.floor(tonumber(destWarp) or 0) + 1
+  local target = def.warps and def.warps[idx] or nil
+  local cellX, cellY
+  if target then
+    cellX, cellY = target.x or -1, target.y or -1
+  else
+    cellX = math.floor((def.width or 2) / 2)
+    cellY = math.floor((def.height or 2) / 2)
+  end
+  return {
+    def = def,
+    ox = ox, oy = oy, laidOut = laidOut and true or false,
+    cellX = cellX, cellY = cellY,
+    label = tostring(destMap) .. " #" .. tostring(math.floor(tonumber(destWarp) or 0)),
+  }
+end
+
 return Warps

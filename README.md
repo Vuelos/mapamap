@@ -3,12 +3,8 @@
 A live map editor mod for [gen1recomp](https://github.com/bryanthaboi/gen1recomp).
 
 Paint blocks, drop NPCs/signs/warps, and reshape the overworld **directly on the
-running game** -- Factorio-style. No editor screen, no restarts: you keep walking
+running game**. No editor screen, no restarts: you keep walking
 around while the world changes under your cursor. Works on both generations.
-
-> ## ⚠️ WARNING!
-> **Save your game after editing the map** so you don't get stuck inside a solid
-> block or outside the map bounds. If a change traps you, load your save.
 
 *Mostly vibecoded.*
 
@@ -17,7 +13,7 @@ around while the world changes under your cursor. Works on both generations.
 ## Getting started
 
 1. Drop this folder into your game's `mods/` directory.
-2. Play, walk somewhere with room to work.
+2. Play, walk where you want to build.
 3. Press **F6** to open the editor overlay. Press **F6** or **Esc** again to
    close it -- everything you painted is saved automatically.
 

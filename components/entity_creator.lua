@@ -140,6 +140,7 @@ function EntityCreator.build(session, entityType)
   elseif entityType == "warp" then
     add("destMap", "Dest map", session.mapId or "", "dropdown", "maps")
     add("destWarp", "Warp #", "0", "number")
+    add("newmap", "New map", "", "action")
   elseif entityType == "pc" then
     add("label", "Name", "PC", "text")
     addChoice("movement", "Walks", "STAY", MOVEMENT_CHOICES)
@@ -516,7 +517,7 @@ function EntityCreator.applyEdit(ui, session, d)
     local v = f.value
     local ok
     -- Shop items are managed as a list; skip the form fields that represent
-    -- the picker and display rows — they're written from d.shopItems below.
+    -- the picker and display rows â€” they're written from d.shopItems below.
     if f.key == "addItem" or f.key == "shopItems" then
       ok = true
     elseif et == "object" then
@@ -854,6 +855,29 @@ function EntityCreator.restoreDraft(ui, session, draft)
   return d
 end
 
+-- NEW MAP action row (warp form): creates a brand-new map flush against the
+-- edited grid on the first free edge and re-points the draft's destination
+-- at it (warp # 0), so CREATE arms a warp leading to fresh space.  The new
+-- map is laid out + persisted like any grid expansion, but the editor stays
+-- on the current map (no adoption).
+local function createNewDestMap(ui, session, d)
+  local NewMap = require("mods.mapamap.domain.new_map")
+  local newId = NewMap.createWarpDestination(session)
+  if not newId then
+    d.error = "no free edge for a new map"
+    return true
+  end
+  for _, f in ipairs(d.fields or {}) do
+    if f.key == "destMap" then f.value = newId end
+    if f.key == "destWarp" then f.value = "0" end
+  end
+  d.error = nil
+  d.status = "warp target: " .. tostring(newId)
+  return true
+end
+-- Exposed for tests and keyboard/mouse dispatch.
+EntityCreator.createNewDestMap = createNewDestMap
+
 -- Opens the Party Editor on the battler form's selected class (shared roster,
 -- party #1), parking the draft so closing the editor brings the form back.
 local function openTeamEditor(ui, session, d)
@@ -966,6 +990,7 @@ function EntityCreator.mousepressed(ui, session, mx, my, button)
   if idx and d.fields and idx <= #d.fields then
     d.index = idx
     d.error = nil
+  d.status = nil
     local f = d.fields[idx]
     if f.type == "dropdown" and button == 1 then
       d.dropdown = { scroll = 0, filter = "" }
@@ -981,6 +1006,9 @@ function EntityCreator.mousepressed(ui, session, mx, my, button)
     elseif f.type == "action" and button == 1 then
       if f.key == "team" then
         return openTeamEditor(ui, session, d)
+      end
+      if f.key == "newmap" then
+        return createNewDestMap(ui, session, d)
       end
       return openTextEditor(ui, session, d, f.key)
     elseif f.key and dialogTargetFor(d.entityType, f.key) and button == 1 then
@@ -1086,9 +1114,11 @@ function EntityCreator.key(ui, session, key)
   if key == "up" then
     d.index = math.max(1, d.index - 1)
     d.error = nil
+  d.status = nil
   elseif key == "down" then
     d.index = math.min(lastRow, d.index + 1)
     d.error = nil
+  d.status = nil
   elseif key == "left" or key == "right" then
     local f = d.fields and d.fields[d.index]
     if f and f.type == "number" then
@@ -1111,6 +1141,9 @@ function EntityCreator.key(ui, session, key)
           return openTeamEditor(ui, session, d)
         end
         if f.key == "shopItems" then return true end
+        if f.key == "newmap" then
+          return createNewDestMap(ui, session, d)
+        end
         return openTextEditor(ui, session, d, f.key)
       elseif f.key and dialogTargetFor(d.entityType, f.key) then
         return openTextEditor(ui, session, d,
@@ -1212,6 +1245,10 @@ function EntityCreator.draw(session, state, vw, vh, font)
           else
             value = "RMB to remove | no items"
           end
+        elseif f.type == "action" and f.key == "newmap" then
+          -- Live feedback: once a fresh map was minted, the row names it.
+          value = state.status and (state.status:match("warp target: (.+)$")
+            or "+ NEW MAP") or "+ NEW MAP"
         elseif f.type == "action" then
           value = "SET"
         end
@@ -1277,6 +1314,8 @@ function EntityCreator.draw(session, state, vw, vh, font)
     hint = "Type a value  Enter: ok  Esc: cancel"
   elseif state.error then
     hint = "!! " .. state.error
+  elseif state.status then
+    hint = state.status
   elseif state.editEntity then
     hint = "L/R: +- / choices  CREATE: write edits back to the entity"
   else
