@@ -32,7 +32,7 @@ jobs:
         run: |
           zip -r "project-${{ inputs.version }}.zip" . \
             -x ".git/*" \
-            -x ".github/*"
+            -x ".github/*" \
             -x "tests/*"
 
       - name: Create Release
