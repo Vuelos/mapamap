@@ -82,9 +82,24 @@ function Inventory.dim(vw, vh)
 end
 
 -- The rect for the panel of equal size sitting at the inventory's right.
+-- The rect side surfaces (picker, Details, creators, Map Slots...) open at.
+-- Normally the column just right of the inventory; on windows too narrow to
+-- fit BOTH, the surface DOCKS over the inventory column itself -- panels
+-- draw after the inventory, so the cover is clean, and nothing goes
+-- half-off-screen on the default 640-wide window.
+function Inventory.surfaceRect(vw, vh)
+  local ix, iy, iw, ih = Inventory.rect(vw, vh)
+  local sx = ix + iw + Inventory.SIDE_GAP
+  if sx + iw > vw - 2 then
+    return ix, iy, iw, ih
+  end
+  return sx, iy, iw, ih
+end
+
+-- Kept for compatibility: every side surface resolves through
+-- Inventory.surfaceRect now, which docks automatically on narrow windows.
 function Inventory.sideRect(vw, vh)
-  local x, y, w, h = Inventory.rect(vw, vh)
-  return x + w + Inventory.SIDE_GAP, y, w, h
+  return Inventory.surfaceRect(vw, vh)
 end
 
 -- Number of slots on one inventory page.

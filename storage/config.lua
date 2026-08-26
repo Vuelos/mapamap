@@ -50,6 +50,7 @@ function State.reset(ui)
   ui.inventory.tab = 1
   ui.inventory.scroll = 1
   ui.showInventory = true
+  ui.showPicker = false
   ui.showBrushEditor = false
   ui.brushSource = nil
   ui.showMapBorders = false

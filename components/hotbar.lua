@@ -5,33 +5,48 @@
 local Common = require("mods.mapamap.common")
 local Item = require("mods.mapamap.components.item")
 local Text = require("mods.mapamap.components.text")
+local Gui = require("mods.mapamap.components.gui")
 
 local Hotbar = {}
 
 Hotbar.SLOTS = 10
-Hotbar.SLOT = 48          -- square slot size
+Hotbar.SLOT = 48          -- square slot size (at the default window)
 Hotbar.GAP = 8            -- gap between slots
 Hotbar.PAD = 10           -- clearance from the bottom edge
 
-local function boxMetrics(vw)
-  local totalW = Hotbar.SLOTS * Hotbar.SLOT + (Hotbar.SLOTS - 1) * Hotbar.GAP
-  return math.floor((vw - totalW) / 2), totalW
+-- The key label for slot i: 1..9 then 0 for the tenth slot (the digit
+-- handler maps "0" to slot 10).
+function Hotbar.label(i)
+  return (i % 10 == 0) and "0" or tostring(i % 10)
+end
+
+local function metrics(vw, vh)
+  local s = Gui.s(vw, vh)
+  return math.max(20, math.floor(Hotbar.SLOT * s)),
+         math.max(2, math.floor(Hotbar.GAP * s)),
+         math.max(2, math.floor(Hotbar.PAD * s))
+end
+
+local function boxMetrics(vw, vh)
+  local slot, gap, pad = metrics(vw, vh)
+  local totalW = Hotbar.SLOTS * slot + (Hotbar.SLOTS - 1) * gap
+  return math.floor((vw - totalW) / 2), totalW, slot, gap, pad
 end
 
 -- The slot rect for index i (1..SLOTS), or nil.
 function Hotbar.slot(i, vw, vh)
   if i < 1 or i > Hotbar.SLOTS then return nil end
-  local x0 = boxMetrics(vw)
-  local x = x0 + (i - 1) * (Hotbar.SLOT + Hotbar.GAP)
-  local y = vh - Hotbar.SLOT - Hotbar.PAD
-  return x, y, Hotbar.SLOT, Hotbar.SLOT
+  local x0, _, slot, gap, pad = boxMetrics(vw, vh)
+  local x = x0 + (i - 1) * (slot + gap)
+  local y = vh - slot - pad
+  return x, y, slot, slot
 end
 
 -- Bounding rect of the whole hotbar strip.
 function Hotbar.rect(vw, vh)
-  local x0, totalW = boxMetrics(vw)
-  local y = vh - Hotbar.SLOT - Hotbar.PAD
-  return x0 - Hotbar.PAD, y - Hotbar.PAD, totalW + Hotbar.PAD * 2, Hotbar.SLOT + Hotbar.PAD * 2
+  local x0, totalW, slot, gap, pad = boxMetrics(vw, vh)
+  local y = vh - slot - pad
+  return x0 - pad, y - pad, totalW + pad * 2, slot + pad * 2
 end
 
 -- Which slot (1..SLOTS) a screen point is over, or nil.
@@ -139,16 +154,19 @@ function Hotbar.draw(session, vw, vh, slots, selected, font)
       love.graphics.setColor(0.6, 0.6, 0.65, 0.5)
       love.graphics.rectangle("line", x, y, w, h)
     end
+    -- Key label on EVERY slot (filled or not) so the 0-9 keys are always
+    -- discoverable; empty slots get a dimmer chip.
     if item then
       local pad = 3
       local size = h - pad * 2
       Item.draw(session, item, x + pad, y + pad, size)
-      -- Slot number: big, black on a light chip so it reads over any tile.
-      if font then
-        Text.label(font, tostring(i), x + 2, y + 2, 2, {
-          bg = { 0.95, 0.95, 0.95, 0.88 }, padX = 2, padY = 0,
-        })
-      end
+    end
+    if font then
+      Text.label(font, Hotbar.label(i), x + 2, y + 2, 2, {
+        bg = item and { 0.95, 0.95, 0.95, 0.88 }
+                       or { 0.75, 0.75, 0.78, 0.45 },
+        padX = 2, padY = 0,
+      })
     end
   end
   love.graphics.setColor(1, 1, 1, 1)

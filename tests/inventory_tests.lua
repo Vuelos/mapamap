@@ -380,6 +380,12 @@ function test_shortcutCellsTogglePanels()
   assert(Input.mousepressed(s, game, sx, sy, 1), "[M] shortcut click is consumed")
   assert(Input.showBrushEditor and Input.showInventory,
     "[M] shortcut opens the Brush Maker")
+  -- Cleanup: the factory panel now DOCKS over the inventory column on
+  -- default-sized windows -- leaving it open here would eat every later
+  -- suite's inventory clicks.
+  Input.showEntitySelector = false
+  Input.entityCreator = nil
+  Input.showBrushEditor = false
 end
 
 -- Content paging leaves room for the one pinned shortcut on every page.
