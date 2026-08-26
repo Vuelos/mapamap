@@ -69,6 +69,51 @@ function test_uniqueMatch_filter()
     "exact entry picks its index")
 end
 
+-- Drawing delegation: Dropdown.draw pre-slices the visible window and must
+-- hand Panel.renderDropdownList a SLICE-RELATIVE window -- the old code
+-- passed firstVis = scroll+1, double-offsetting into the slice and blanking
+-- every row below the first page once scrolled.
+function test_draw_maps_scroll_to_slice_relative_window()
+  local Panel = require("mods.mapamap.components.panel")
+  local captured
+  local orig = Panel.renderDropdownList
+  Panel.renderDropdownList = function(_, _, _, _, _, entries, firstVis,
+                                     numVis, relSel, relHover)
+    captured = { labels = {}, firstVis = firstVis, numVis = numVis,
+                 relSel = relSel, relHover = relHover }
+    for _, e in ipairs(entries) do
+      captured.labels[#captured.labels + 1] = e.label
+    end
+  end
+  -- maxH=60 -> two visible rows; scroll=2 opens on the third entry.
+  Dropdown.draw({ draw = function() end }, ENTRIES, 0, 0, 100, 60, 2, 3)
+  Panel.renderDropdownList = orig
+
+  assert(captured ~= nil, "draw delegates to renderDropdownList")
+  assert(captured.firstVis == 1,
+    "the panel receives the slice from its first row (no double offset)")
+  assert(captured.labels[1] == "BERRY" and captured.labels[2] == "CAKE"
+    and #captured.labels == 2,
+    "the slice holds exactly the scrolled window's entries")
+  assert(captured.relSel == 1,
+    "absolute selIdx 3 becomes slice-relative row 1")
+end
+
+function test_draw_selection_outside_window_has_no_highlight()
+  local Panel = require("mods.mapamap.components.panel")
+  local captured
+  local orig = Panel.renderDropdownList
+  Panel.renderDropdownList = function(_, _, _, _, _, entries, firstVis,
+                                     numVis, relSel)
+    captured = { relSel = relSel }
+  end
+  -- scroll=2 shows entries 3-4; an absolute selection of 1 is off-window.
+  Dropdown.draw({ draw = function() end }, ENTRIES, 0, 0, 100, 60, 2, 1)
+  Panel.renderDropdownList = orig
+  assert(captured.relSel == nil,
+    "selections outside the visible window highlight nothing")
+end
+
 return {
   name = "MAPAMAP_DROPDOWN",
   tests = {
@@ -77,5 +122,7 @@ return {
     "test_scrollBy_direction",
     "test_entryAt_hitAndBounds",
     "test_uniqueMatch_filter",
+    "test_draw_maps_scroll_to_slice_relative_window",
+    "test_draw_selection_outside_window_has_no_highlight",
   },
 }

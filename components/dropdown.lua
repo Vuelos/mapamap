@@ -58,14 +58,28 @@ end
 
 function Dropdown.draw(font, entries, x, y, w, maxH, scroll, selIdx, hoverIdx)
   local maxVisible = Dropdown.visibleCount(maxH)
+  -- Build the visible slice, then hand Panel.renderDropdownList a
+  -- SLICE-RELATIVE window: the panel indexes entries[firstVis + i], so
+  -- passing firstVis = scroll+1 here would offset into the slice a second
+  -- time and blank the bottom rows once scrolled past the first page.
+  local off = scroll or 0
+  local firstAbs = off + 1
   local list = {}
   for k = 1, maxVisible do
-    local id = entries[(scroll or 0) + k]
+    local id = entries[firstAbs + k - 1]
     if not id then break end
     list[k] = { label = id }
   end
-  Panel.renderDropdownList(font, x, y, w, maxH, list,
-    (scroll or 0) + 1, maxVisible, selIdx, hoverIdx, Dropdown.H)
+  -- selIdx / hoverIdx arrive as ABSOLUTE entry indices; convert them into
+  -- slice positions (nil when they sit outside the visible window).
+  local function rel(idx)
+    if idx == nil or idx < firstAbs or idx > off + maxVisible then
+      return nil
+    end
+    return idx - off
+  end
+  Panel.renderDropdownList(font, x, y, w, maxH, list, 1, maxVisible,
+    rel(selIdx), rel(hoverIdx), Dropdown.H)
 end
 
 return Dropdown
