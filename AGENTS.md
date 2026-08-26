@@ -34,13 +34,13 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 | `components/picker.lua`| Tileset picker panel: catalog (Items & NPCs first), dropdown, grid, draw |
 | `components/inventory.lua`| Persistent left panel with category tabs (Tiles/Entities/Blueprints/Brushes); each tab's FIRST grid cell is that tab's own toolbar shortcut ([E] tileset picker, [F] entity factory, [R] blueprint rect-select, [M] Brush Maker; letters draw in caps) and the rest of the grid lists only the stored collection (`tabFor` / `listFor`); adds from hotbar drops file the item silently onto its respective tab, creator/blueprint saves jump to theirs; also the collection model (add/list) |
 | `components/item.lua`  | Shared slot thumbnail renderer (blocks, sprites, items, blueprints, warps, objects, brushes)   |
-| `components/brush_editor.lua` | Brush Maker panel (toolbar `M`): spatial two-layout slot grid — a 5x5 main grid (core 3x3 centered, inner corners on the panel corners) over a complete 5x5 line cross (borderless runs ln/ls/lw/le at the arm tips, v/h corridors inner on their axes, isolated o at the cross center; nonexistent join positions render as dim placeholders); tiles are dragged/clicked in from the hotbar/picker/inventory, RMB clears a slot, SAVE stores `{ kind = "brush" }` in the inventory's Brushes tab; RMB on a saved brush cell loads it back into the maker |
-| `components/slot_panel.lua` | Map Slots panel (toolbar `V`): save-slot manager for the whole edit-set — slots list (click selects, wheel scrolls), action strip (SAVE / LOAD / NEW / RENAME / DEL / EXPORT), and the export-folder listing (`export/*.lua`; click imports). RENAME types inline (printables append, Backspace trims, Enter commits via `Slots.rename`, Esc cancels); all panel state lives on Input (`slotsOpen`, `slotSel`, `slotRename`, `slotScroll`, `slotFileScroll`, `slotMsg`) |
-| `storage/slots.lua` | Map-slot persistence: a slot deep-copies ALL five edit buckets (patches / encounters / connections / newMaps / trainerParties) under a name in `mapamap_slots`. `applyBuckets` is a FULL bucket replacement (activation never merges), export/import move records through `export/<name>.lua` under the mod's own folder — always via `love.filesystem` (sandbox-safe: reads fall through to the mod source, writes land in its compat overlay; raw `io.open` is stripped). The auto `previous` slot is written by every LOAD as a recoverable pre-swap backup |
+| `components/brush_editor.lua` | Brush Maker panel (toolbar `M`): spatial two-layout slot grid Ã¢â‚¬â€ a 5x5 main grid (core 3x3 centered, inner corners on the panel corners) over a complete 5x5 line cross (borderless runs ln/ls/lw/le at the arm tips, v/h corridors inner on their axes, isolated o at the cross center; nonexistent join positions render as dim placeholders); tiles are dragged/clicked in from the hotbar/picker/inventory, RMB clears a slot, SAVE stores `{ kind = "brush" }` in the inventory's Brushes tab; RMB on a saved brush cell loads it back into the maker |
+| `components/slot_panel.lua` | Map Slots panel (toolbar `V`): save-slot manager for the whole edit-set Ã¢â‚¬â€ slots list (click selects, wheel scrolls), action strip (SAVE / LOAD / NEW / RENAME / DEL / EXPORT), and the export-folder listing (`export/*.lua`; click imports). RENAME types inline (printables append, Backspace trims, Enter commits via `Slots.rename`, Esc cancels); all panel state lives on Input (`slotsOpen`, `slotSel`, `slotRename`, `slotScroll`, `slotFileScroll`, `slotMsg`) |
+| `storage/slots.lua` | Map-slot persistence: a slot deep-copies ALL five edit buckets (patches / encounters / connections / newMaps / trainerParties) under a name in `mapamap_slots`. `applyBuckets` is a FULL bucket replacement (activation never merges), export/import move records through `export/<name>.lua` under the mod's own folder Ã¢â‚¬â€ always via `love.filesystem` (sandbox-safe: reads fall through to the mod source, writes land in its compat overlay; raw `io.open` is stripped). The auto `previous` slot is written by every LOAD as a recoverable pre-swap backup |
 | `components/warp_preview.lua` | Warp destination preview + interactive panel: laid-out destinations mark the world (body outline, pulsing arrival cell, label chip); isolated indoor rooms render a TILED panel (real blocks via the tileset bundle) with numbered warp markers -- LMB a tile mints a destination warp and selects it as arrival, LMB/RMB markers select/remove; geometry shared between draw and hit-test (`interact`/`applyClick`/`draw`) |
 | `components/details.lua`| Modal Details panel for warps + objects + inventory items (Pos/Dest/name/label, nudge); bottom action strip (MOVE / EDIT / REMOVE); keyboard: Up/Down, L/R: +/-, Enter: edit, X: delete, M: move, E: edit entity; open/close/keyboard model |
 | `components/entity_creator.lua` | Creator form for NPCs / items / trainers / mons / shops / warps / signs. NEW arms the hotbar slot on CREATE; EDIT (via Details strip) applies written changes back to the placed entity; right-click an inventory cell to edit it |
-| `domain/` `engine/` `storage/` | Reused data operations from `map_editor` split by concern: `domain/*` pure data/state mutators, `engine/*` game & LÖVE bridges (gen, graft, coords, world_adapter), `storage/*` persistence (patch_saver, config) |
+| `domain/` `engine/` `storage/` | Reused data operations from `map_editor` split by concern: `domain/*` pure data/state mutators, `engine/*` game & LÃƒâ€“VE bridges (gen, graft, coords, world_adapter), `storage/*` persistence (patch_saver, config) |
 | `domain/warps.lua` | Warp editing operations (place, move, remove, connect, label) mixed into Session |
 | `engine/world_adapter.lua` | Engine/rendering bridge: Gen 1 renderer rebuilds, Gen 2 canvas drop/re-bake, live NPC pool sync, `applySavedPatches`, `createAdjacentMap`, `reconcileSession` |
 
@@ -48,10 +48,11 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 
 | Action                       | Input                                   |
 | ---------------------------- | --------------------------------------- |
-| Toggle overlay               | `F6` (or `Esc` closes)                    |
+| Toggle overlay               | `F6` only -- Esc never closes the editor  |
+| Dismiss the inventory        | `Esc` (closes the inventory surface when open; panels with their own Esc handling consume it first) |
 | Paint selected block         | Left-click / left-drag over the world   |
 | Erase back to saved baseline | Right-click / right-drag                |
-| Select hotbar slot           | Click slot, or `1`–`8`                  |
+| Select hotbar slot           | Click slot, or `1`-`9`, `0` (slot 10)|
 | Pick block under cursor      | `Q`                                     |
 | Undo / redo                  | `Ctrl+Z` / `Ctrl+Y` (covers block paints, warps, objects) |
 | Open / close picker          | `E`                                     |
@@ -65,18 +66,18 @@ Entry: `main.lua` toggles F6, registers the `render.hud` hook, and wraps the
 | Stamp a blueprint            | Load it into a slot, then LMB paint     |
 | Open Brush Maker             | `M` (or the toolbar M button); hides with the inventory |
 | Fill a brush slot            | Drag a tile in, or click the slot with a tile on the hotbar; RMB clears a slot; click a filled slot with nothing selected grabs its tile |
-| Save / clear / delete        | SAVE (needs only the center tile) stores it in the Brushes tab — updating the loaded brush in place when it was RMB-loaded; CLEAR empties every slot; DELETE removes the loaded brush from the inventory (draft keeps its slots) |
-| Paint a terrain brush        | Load a saved brush into a slot, then LMB paint — each cell picks its tile from the join mask and surrounding brush cells re-blend |
+| Save / clear / delete        | SAVE (needs only the center tile) stores it in the Brushes tab Ã¢â‚¬â€ updating the loaded brush in place when it was RMB-loaded; CLEAR empties every slot; DELETE removes the loaded brush from the inventory (draft keeps its slots) |
+| Paint a terrain brush        | Load a saved brush into a slot, then LMB paint Ã¢â‚¬â€ each cell picks its tile from the join mask and surrounding brush cells re-blend |
 | Edit a saved brush           | RMB a Brushes-tab cell loads it into the maker |
-| Place a warp                 | Load an Entities-tab cell (or build one in the factory) into a slot, then LMB paint. The New Warp template places exactly ONE self-destined warp (no return pair). The factory's **NEW MAP** row mints an isolated indoor room (`_IND`, no connections — warp-only access) and points the draft at it; while the form or Details is open, the destination is previewed live (world outline + cell pulse for laid-out maps, boxed inset for indoor rooms) |
+| Place a warp                 | Load an Entities-tab cell (or build one in the factory) into a slot, then LMB paint. The New Warp template places exactly ONE self-destined warp (no return pair). The factory's **NEW MAP** row mints an isolated indoor room (`_IND`, no connections Ã¢â‚¬â€ warp-only access) and points the draft at it; while the form or Details is open, the destination is previewed live (world outline + cell pulse for laid-out maps, boxed inset for indoor rooms) |
 | Place / copy an object       | Entities-tab cells load copy tools; the entity factory ([F]) configures fresh NPCs / items / trainers / mons / shops and CREATE arms the hotbar slot; both paint with LMB (1x1 cell). Placements follow the cursor across seams onto laid-out neighbors (`Session.targetAt` + `withTargetDef`, neighbor diffs flagged via `refreshNeighborMap`). A picked-up SIGN tool clones the original message silently (no Details popup). Creator tools keep their `create` spec when re-loaded from the inventory. RMB an inventory cell to edit it in the creator form |
-| Move a warp                  | MOVE on its Details panel arms a relocation carried on `Input.moveTarget` — the next LMB lands the entity, following the laid-out map that owns the destination cell (`relocateEntityWorld`: fresh index on seam crossings, both defs captured for undo). Right-click NEVER drags: it opens Details at press |
+| Move a warp                  | MOVE on its Details panel arms a relocation carried on `Input.moveTarget` Ã¢â‚¬â€ the next LMB lands the entity, following the laid-out map that owns the destination cell (`relocateEntityWorld`: fresh index on seam crossings, both defs captured for undo). Right-click NEVER drags: it opens Details at press |
 | Graphical dest pick          | `C`, then click the destination on the world     |
-| Open Details / rename        | RMB an inventory cell, or any world warp / object / sign — entities on OTHER laid-out maps behave identically (full editing: REMOVE lifts them off their owner map via an owner-aware fallback, flagged + refreshed there) |
+| Open Details / rename        | RMB an inventory cell, or any world warp / object / sign Ã¢â‚¬â€ entities on OTHER laid-out maps behave identically (full editing: REMOVE lifts them off their owner map via an owner-aware fallback, flagged + refreshed there) |
 | Edit a field (Details)       | Up/Down: field, Left/Right: +/-, Enter: edit, X: delete, M: move, E: edit entity, Esc: close; click a row selects it (Enter edits), actions (encounters / team) run on click |
 | MOVE / EDIT / REMOVE buttons | Bottom strip of the Details panel for live world entities; MOVE arms a relocation carried on `Input.moveTarget` (next LMB lands the entity), EDIT reopens the entity in its creator form, REMOVE deletes it |
 | Open Map Slots               | `V` (or the toolbar V button); Esc closes |
-| Save a map slot              | Click a slot row (or NEW for a fresh YY.MM.DD.HH.MM.SS timestamp), then SAVE — captures the whole live edit-set under that name |
+| Save a map slot              | Click a slot row (or NEW for a fresh YY.MM.DD.HH.MM.SS timestamp), then SAVE Ã¢â‚¬â€ captures the whole live edit-set under that name |
 | Load / rename / delete       | LOAD swaps the stored edit-set in (auto-backup to the `previous` slot first, then replays into the running world and reopens the session); RENAME types inline (Enter commits, Esc cancels); DEL removes it |
 | Export / import slots        | EXPORT writes `export/<name>.lua` next to the mod source; clicking a file under EXPORT FILES imports it as a new slot |
 | Scroll Map Slots lists       | Wheel over the slots list or the export-files list |
@@ -110,7 +111,7 @@ Map growth happens at two points:
 2. **Paint-time creation** (`MapGrid.createForBlocks`/`createForPaint`): when
    a block or blueprint is painted on void adjacent to a laid-out map, a new
    `_EXT` map is created flush against the nearest host.  The new map is wired
-   with reciprocal connections and appears as a neighbor immediately — no
+   with reciprocal connections and appears as a neighbor immediately Ã¢â‚¬â€ no
    session switch is needed.  Painting far from any laid-out map (no flush
    contact possible) stays a no-op.
 
@@ -120,7 +121,7 @@ which delegates to `MapGrid.createForPaint` (single block) or
 cells in the stamp rect and pre-create the map before the stamp loop runs.
 
 `domain/map_grid.lua` derives world placement from the connection graph alone
-(BFS over connection offsets — no schema change, root world-anchored at
+(BFS over connection offsets Ã¢â‚¬â€ no schema change, root world-anchored at
 (0,0)):
 
 - **Multi-connection sides**: a side can carry MORE than one connection.
@@ -132,17 +133,17 @@ cells in the stamp rect and pre-create the map before the stamp loop runs.
 - **Seam gaps** (`seamGaps`/`edgeCoverage`): the free seams of a layout member
   are derived from the ACTUAL laid-out map bodies flush against it, not from
   connection fields. A legacy connection without a `size` restricts nothing on
-  its own — only the map it places covers the seam.
+  its own Ã¢â‚¬â€ only the map it places covers the seam.
 - **Candidates**: every open gap-fill void (a rect sitting flush on a free
   seam segment of a depth-capped layout member, not overlapping the full
   reachable layout, sized to the leftover gap width) scored by how many laid-out
   maps accept a connection to it (`contactAccepts` rejects only when the
   void's seam span would overlap an existing connection's `size` there). A side
-  may already carry connections — a partial cover just leaves smaller gap voids
+  may already carry connections Ã¢â‚¬â€ a partial cover just leaves smaller gap voids
   that slot into the leftover space instead of being rejected outright.
 - **Create** (`createMap`): a new `_EXT` map wired via
-  `Connections.addConnection` (2-way) to every accepting flush contact — an
-  occupied side stacks an extra instead of clobbering the primary — tracked
+  `Connections.addConnection` (2-way) to every accepting flush contact Ã¢â‚¬â€ an
+  occupied side stacks an extra instead of clobbering the primary Ã¢â‚¬â€ tracked
   whole under `mapamap_new_maps` (snapshot taken AFTER wiring) so it persists
   across a reload. Wired existing maps are marked `neighborDirty` so their
   `connectionsExtra` diff patches survive.
@@ -188,26 +189,26 @@ _originalSnapshot, ...`) which `domain/edit_session.lua` provides and
 `controllers/input.lua` fills.
 
 Do **not** pull in the full-screen scene modules (`scene/*`, `renderer/drawing`)
-— the overlay draws its own UI. Save keys are namespaced (`mapamap_patches`,
+Ã¢â‚¬â€ the overlay draws its own UI. Save keys are namespaced (`mapamap_patches`,
 `mapamap_hotbar`, `mapamap_inventory`, `mapamap_new_maps`; legacy
 `mapamap_blueprints` is folded into the inventory on load) so both mods can
 coexist without clobbering each other.
 
 ## Build & verification
 
-- This is a LÖVE project; run with `love <gamedir>` after placing the mod in
+- This is a LÃƒâ€“VE project; run with `love <gamedir>` after placing the mod in
   `mods/`.
 - Validate a single file's syntax with `luajit -b <file> out` (exit 0 = OK).
 - Run the headless unit suites (grid model, connection graph, coords
   round-trip, picker catalog) with
-  `luajit mods/mapamap/tests/test_all.lua` — exits 1 on failure.
+  `luajit mods/mapamap/tests/test_all.lua` Ã¢â‚¬â€ exits 1 on failure.
   Each suite lives in `mods/mapamap/tests/<name>_tests.lua` as individual files.
 
 ## Practices
 
 - Keep the overlay non-opaque; the player keeps walking while editing (F6 must not
   pause the game.
-- Everything drawn through `render.hud` runs in LOVE screen units — always
+- Everything drawn through `render.hud` runs in LOVE screen units Ã¢â‚¬â€ always
   `love.graphics.push("all")` + `origin()` and restore color.
 - Guard all love input wrappers with the `active` flag so the vanilla game is
   untouched when the overlay is closed.
