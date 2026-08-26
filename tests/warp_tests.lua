@@ -263,6 +263,13 @@ end
 function test_inventoryRmbOpensWarpDetails()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   s.def.warps = {}
+  -- Docked side surfaces would eat inventory clicks: start clean.
+  Input.showEntitySelector = false
+  Input.entityCreator = nil
+  Input.showBrushEditor = false
+  Input.slotsOpen = false
+  Input.details = nil
+  Input.showInventory = true
   local w = s:placeWarp(3, 3)
   resetInput()
   Input.inventory = { items = { { kind = "entity", entityType = "warp", warp = w } },
@@ -275,7 +282,12 @@ end
 
 function test_inventoryRmbOnItemOpensDetails()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
-  resetInput()
+  Input.showEntitySelector = false
+  Input.entityCreator = nil
+  Input.showBrushEditor = false
+  Input.slotsOpen = false
+  Input.details = nil
+  Input.showInventory = true
   s.def.blocks = {}
   local it = { kind = "block", id = 7 }
   Input.inventory = { items = { it }, tab = 1, scroll = 1 }

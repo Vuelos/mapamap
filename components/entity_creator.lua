@@ -211,8 +211,7 @@ end
 -- Geometry
 
 function EntityCreator.rect(vw, vh)
-  local x, y, w, h = Inventory.sideRect(vw, vh)
-  return x + w + Inventory.SIDE_GAP, y, w, h
+  return Inventory.surfaceRect(vw, vh)
 end
 
 function EntityCreator.over(vw, vh, mx, my)
