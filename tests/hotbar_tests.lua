@@ -66,6 +66,24 @@ local function inventoryCellCentre(i)
             + row * (Inventory.SLOT + Inventory.GAP) + Inventory.SLOT / 2
 end
 
+-- Esc NEVER closes the editor (F6 only): it dismisses the inventory surface
+-- when open, and stays swallowed by the overlay otherwise.
+function test_escapeClosesInventoryButNotTheEditor()
+  local s = Session.new(mod, game, "PALLET_TOWN")
+  assert(s, "no session")
+  Input.reset()
+  Input.showInventory = true
+  assert(Input.keypressed(s, "escape"), "Esc is consumed by the overlay")
+  assert(not Input.showInventory, "Esc closes the inventory")
+  -- Esc with the inventory already closed is a no-op swallow.
+  Input.showInventory = false
+  assert(Input.keypressed(s, "escape"), "Esc stays consumed")
+  assert(not Input.showInventory and not Input.showPicker,
+    "Esc opens nothing when everything is closed")
+  -- Restore the default surface state for later suites.
+  Input.showInventory = true
+end
+
 function test_pickerClickReplacesSelectedSlot()
   local s = Session.new(mod, game, "PALLET_TOWN")
   assert(s, "no session")
@@ -207,6 +225,7 @@ end
 return {
   name = "MAPAMAP_HOTBAR",
   tests = {
+    "test_escapeClosesInventoryButNotTheEditor",
     "test_pickerClickReplacesSelectedSlot",
     "test_blueprintClickReplacesSelectedSlot",
     "test_dragToHotbarTargetSlot",

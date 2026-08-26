@@ -1071,6 +1071,13 @@ function Input.keypressed(session, key)
       Input.applySelection(session)
       return true
     end
+  elseif key == "escape" then
+    -- Esc NEVER closes the editor (that is F6 alone): it tidies the overlay,
+    -- dismissing the inventory surface when it is open.  Panels with their
+    -- own Esc handling (Details, creators, dropdowns...) consumed the key
+    -- before this tail ran.
+    if Input.showInventory then toggleInventory() end
+    return true
   end
   return false
 end

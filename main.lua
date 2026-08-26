@@ -119,12 +119,13 @@ local function run(mod)
           return true
         end
         if consumed then return end
-        if key == "escape" then
-          SessionManager.close(); return
-        end
+        -- F6 is the ONLY way to close the editor.  Escape is handled inside
+        -- the overlay (dismisses the inventory / focused panel) and is
+        -- swallowed here so it never reaches the game underneath.
         if key == "f6" then
           SessionManager.close(); return
         end
+        if key == "escape" then return end
       else
         if key == "f6" then
           local ok, err = xpcall(function()

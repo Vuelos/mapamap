@@ -36,6 +36,13 @@ local function resetInput()
   Input.selectedWarp = nil
   Input.warpDestPick = false
   Input.details = nil
+  -- Surfaces that DOCK over the inventory column on narrow windows must be
+  -- cleared too, or they silently eat every inventory click below.
+  Input.showEntitySelector = false
+  Input.entityCreator = nil
+  Input.showBrushEditor = false
+  Input.slotsOpen = false
+  Input.showInventory = true
   Input.inventory = { items = {}, tab = 1, scroll = 1 }
 end
 
