@@ -10,5 +10,6 @@
   "priority": 100,
   "permissions": ["engine_internals", "filesystem"],
   "description": "on-map map editor: paint blocks directly on the map with hotbar and inventory.",
-  "gen2compat": true
+  "gen2compat": true,
+  "github": "Vuelos/mapamap"
 }
