@@ -236,7 +236,7 @@ end
 
 -- Uniform KEY_MODALS contract: while the panel is open every key is
 -- consumed.  Rename typing gets the printable keys; otherwise Up/Down walk
--- the slot list, Enter loads, V/Esc/F6 close the surface.
+-- the slot list, Enter loads, V/Esc/Y close the surface.
 function SlotPanel.key(ui, session, key)
   if ui.slotRename then
     if key == "escape" then
@@ -251,7 +251,7 @@ function SlotPanel.key(ui, session, key)
     end
     return true
   end
-  if key == "escape" or key == "v" or key == "f6" then
+  if key == "escape" or key == "v" or key == "y" then
     ui.slotsOpen = false
     return true
   end

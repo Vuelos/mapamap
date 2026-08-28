@@ -112,6 +112,7 @@ function test_blueprintClickReplacesSelectedSlot()
   local s = Session.new(mod, game, "PALLET_TOWN")
   assert(s, "no session")
   Input.reset()
+  Input.showInventory = true
   -- Blueprints live on tab 3 (Tiles / Entities / Blueprints / Brushes).
   Input.inventory = {
     items = { { kind = "blueprint", id = "BP_TEST", w = 1, h = 1, tiles = { 0 } } },

@@ -182,6 +182,7 @@ function test_inventoryCellLoadsIntoActiveSlot()
   local s = Session.new(mod, game, "PALLET_TOWN")
   assert(s, "no session")
   resetInput()
+  Input.showInventory = true
   Input.hotbar[1] = { kind = "block", id = 1 }
   Input.inventory = { items = { { kind = "block", id = 7 } }, tab = 1, scroll = 1 }
   -- The stored item sits in the saved inventory grid; click its actual cell.
@@ -205,6 +206,7 @@ function test_tabClickSwitchesTab()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   assert(s, "no session")
   resetInput()
+  Input.showInventory = true
   Input.inventory = { items = {
     { kind = "block", id = 1 }, { kind = "entity", entityType = "warp", destMap = "PALLET_TOWN" },
   }, tab = 1, scroll = 1 }
@@ -218,6 +220,7 @@ function test_dragDropOntoInventoryAddsItem()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   assert(s, "no session")
   resetInput()
+  Input.showInventory = true
   Input.dragItem = { kind = "blueprint", id = "bp_drop" }
   local cx, cy = inventoryCellCentre(1)
   local consumed = Input.mousereleased(s, cx, cy, 1)
@@ -255,6 +258,7 @@ function test_hotbarDragAddsCopyToInventory()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   assert(s, "no session")
   resetInput()
+  Input.showInventory = true
   Input.hotbar[1] = { kind = "block", id = 3 }
   Input.selected = 1
   local x1, y1, w1, _ = Hotbar.slot(1, VW, VH)
@@ -311,6 +315,7 @@ function test_wheelScrollsInventoryPage()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   assert(s, "no session")
   resetInput()
+  Input.showInventory = true
   local per = Inventory.contentPerPage(VW, VH)
   Input.inventory.items = {}
   for i = 1, per + 3 do
@@ -529,7 +534,8 @@ function test_tabToggleHidesAndShowsInventory()
   local s = assert(Session.new(mod, game, "PALLET_TOWN"))
   assert(s, "no session")
   resetInput()
-  assert(Input.showInventory == true, "inventory is visible by default")
+  Input.showInventory = true
+  assert(Input.showInventory == true, "inventory is visible when opened")
   local consumed = Input.keypressed(s, "tab")
   assert(consumed, "TAB key should be consumed")
   assert(Input.showInventory == false, "TAB should hide the inventory")

@@ -94,7 +94,7 @@ local function run(mod)
     end
   end, 200)
 
-  -- F6 toggles the overlay; while active, keyboard shortcuts are routed to
+  -- Y toggles the overlay; while active, keyboard shortcuts are routed to
   -- the overlay (E inventory, P pick, 1-8 slots, N.. new-map edges on the
   -- same keys the editor used is NOT reused here -- we keep it simple).
   do
@@ -119,22 +119,22 @@ local function run(mod)
           return true
         end
         if consumed then return end
-        -- F6 is the ONLY way to close the editor.  Escape is handled inside
+        -- Y is the ONLY way to close the editor.  Escape is handled inside
         -- the overlay (dismisses the inventory / focused panel) and is
         -- swallowed here so it never reaches the game underneath.
-        if key == "f6" then
+        if key == "y" then
           SessionManager.close(); return
         end
         if key == "escape" then return end
       else
-        if key == "f6" then
+        if key == "y" then
           local ok, err = xpcall(function()
             SessionManager.open(mod, self)
           end, tb)
           if not ok then
-            logCrash(mod, "f6-open", err)
+            logCrash(mod, "y-open", err)
           else
-            mod.log:info("mapamap: F6 open %s (gen2=%s)", SessionManager.active and "OK" or "no-session", tostring(Gen.isGen2()))
+            mod.log:info("mapamap: Y open %s (gen2=%s)", SessionManager.active and "OK" or "no-session", tostring(Gen.isGen2()))
           end
           return
         end
@@ -191,7 +191,7 @@ local function run(mod)
     SessionManager.replayPatches(mod)
   end)
 
-  mod.log:info("mapamap loaded - F6 to paint directly on the overworld")
+  mod.log:info("mapamap loaded - Y to paint directly on the overworld")
 end
 
 local Main = function(mod)

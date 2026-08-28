@@ -110,7 +110,7 @@ Input.selected = 1
 -- The inventory panel: a persistent collection of placeables (blocks,
 -- sprites/items, warps, blueprints) stored flat, shown through one tab.
 Input.inventory = { items = {}, tab = 1, scroll = 1 }
-Input.showInventory = true
+Input.showInventory = false
 Input.mouseButtons = { [1] = false, [2] = false, [3] = false }
 -- The tileset picker panel.
 Input.showPicker = false
@@ -727,7 +727,7 @@ function Input.mousepressed(session, game, mx, my, button)
   local toolIdx = Toolbar.at(vw, vh, mx, my)
   if toolIdx then
     if button == 1 then
-      TOOL_TOGGLES[toolIdx]()
+      TOOL_TOGGLES[toolIdx](session)
     end
     return true
   end
@@ -1072,7 +1072,7 @@ function Input.keypressed(session, key)
       return true
     end
   elseif key == "escape" then
-    -- Esc NEVER closes the editor (that is F6 alone): it tidies the overlay,
+    -- Esc NEVER closes the editor (that is Y alone): it tidies the overlay,
     -- dismissing the inventory surface when it is open.  Panels with their
     -- own Esc handling (Details, creators, dropdowns...) consumed the key
     -- before this tail ran.

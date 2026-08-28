@@ -14,7 +14,7 @@ around while the world changes under your cursor. Works on both generations.
 
 1. Drop this folder into your game's `mods/` directory.
 2. Play, walk where you want to build.
-3. Press **F6** to open the editor overlay. Press **F6** or **Esc** again to
+3. Press **Y** to open the editor overlay. Press **Y** or **Esc** again to
    close it -- everything you painted is saved automatically.
 
 ## The basics
@@ -34,7 +34,7 @@ around while the world changes under your cursor. Works on both generations.
 
 | Key        | Action                                          |
 | ---------- | ----------------------------------------------- |
-| `F6`       | Open / close the editor                         |
+| `Y`       | Open / close the editor                         |
 | `Esc`      | Close the editor (or the open panel)            |
 | `1`–`8`    | Select a hotbar slot                            |
 | `Q`        | Pick the tile under the cursor                  |

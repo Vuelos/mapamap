@@ -49,7 +49,7 @@ function State.reset(ui)
   ui.entityCreator = nil
   ui.inventory.tab = 1
   ui.inventory.scroll = 1
-  ui.showInventory = true
+  ui.showInventory = false
   ui.showPicker = false
   ui.showBrushEditor = false
   ui.brushSource = nil
